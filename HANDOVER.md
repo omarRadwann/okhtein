@@ -1,5 +1,17 @@
 # OKHTEIN 3D SITE — SESSION HANDOVER
 
+> **LATEST (2026-06-15) — live-bug fix pass (deployed gh-pages 1f96b0c / main 4759c46).** Fixed 4 user-reported
+> defects: (1) **products were invisible on GH Pages** — `lib/products.ts` used a bare `/products/…` src but
+> next/image with `unoptimized` doesn't add basePath → now `withBase('/products/…')`; (2) **black void + finale
+> glyphs floating mid-walk** — `TwoSistersFinale` now reveal-gated (`reveal=smoothstep(p,0.58,0.74)`, forms on
+> approach) + a **lit mashrabiya terminus** (z≈-13.9, all MeshBasicMaterial — std-material is black at this depth)
+> framed by `CorridorArch z-13.2`, warmer/tighter fog `#15110C 11/28`; (3) **hero now dominates** — bag
+> `normalizeTo 1.32` (1.35 is the clip ceiling); (4) **gold bag un-occluded** — `RUNWAY_SLOTS` S1 → `[-2.3,0,-2.1]`.
+> Commerce polish: silhouettes fade on `<Image onLoad>` (stop bleeding through transparent PNGs), vitrine
+> spotlights + drop-shadows on FeaturedUnboxing/QuickView. **Verify harness: `node scripts/_verify_fix.mjs <url>`**
+> (audits every <img> + 404s + 3D beats + scrolls commerce). Always scroll INTO the commerce DOM — the prior
+> "0 404s" pass was false because it only loaded the hero.
+
 > Read this first to cold-start a new session. It captures what the project IS, where it
 > stands, the goal we're driving toward, the non-obvious knowledge needed to continue safely,
 > and the open items. Pair it with the auto-memory `project_okhtein_luxury_bags.md` (the long
