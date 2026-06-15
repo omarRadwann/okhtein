@@ -1,0 +1,402 @@
+'use client'
+
+import { useEffect, useRef, useState } from 'react'
+import dynamic from 'next/dynamic'
+import Link from 'next/link'
+import Image from 'next/image'
+import { useBedSection } from '@/lib/audio'
+
+// Real 3D finale (WebGL/R3F) — client-only, like VaultCanvas.
+const SkyScene = dynamic(() => import('./SkyScene'), { ssr: false })
+// Floating dust motes drifting in the light beam — deterministic (no Math.random →
+// SSR-safe, no hydration mismatch): x%, y%, size px, drift duration s, delay s.
+const MOTES = [
+  { x: 30, y: 72, s: 3, d: 15, delay: 0 },
+  { x: 44, y: 84, s: 2, d: 19, delay: 3 },
+  { x: 52, y: 66, s: 4, d: 13, delay: 6 },
+  { x: 61, y: 78, s: 2, d: 17, delay: 1 },
+  { x: 38, y: 58, s: 3, d: 21, delay: 8 },
+  { x: 68, y: 62, s: 2, d: 14, delay: 4 },
+  { x: 47, y: 48, s: 3, d: 18, delay: 2 },
+  { x: 56, y: 88, s: 3, d: 16, delay: 7 },
+  { x: 34, y: 40, s: 2, d: 22, delay: 5 },
+  { x: 64, y: 44, s: 3, d: 20, delay: 9 },
+  { x: 50, y: 30, s: 2, d: 24, delay: 3 },
+  { x: 42, y: 76, s: 2, d: 15, delay: 10 },
+  { x: 58, y: 54, s: 4, d: 12, delay: 6 },
+  { x: 71, y: 70, s: 2, d: 18, delay: 2 },
+  // Denser dust + two slow warm EMBERS (s:5) for a richer beam.
+  { x: 46, y: 36, s: 2, d: 23, delay: 4 },
+  { x: 54, y: 50, s: 3, d: 17, delay: 11 },
+  { x: 40, y: 64, s: 2, d: 20, delay: 7 },
+  { x: 62, y: 52, s: 3, d: 15, delay: 1 },
+  { x: 48, y: 70, s: 2, d: 19, delay: 9 },
+  { x: 36, y: 50, s: 2, d: 22, delay: 12 },
+  { x: 66, y: 80, s: 3, d: 16, delay: 5 },
+  { x: 51, y: 42, s: 2, d: 21, delay: 8 },
+  { x: 44, y: 56, s: 5, d: 26, delay: 2 },
+  { x: 57, y: 61, s: 5, d: 28, delay: 13 },
+]
+const clamp01 = (x: number) => (x < 0 ? 0 : x > 1 ? 1 : x)
+const smooth = (x: number) => x * x * (3 - 2 * x)
+
+// "The Meeting" — the finale, in real 3D. The two signature Okhtein bags
+// (bagSisterA + bagSisterB) glide in across a glossy marble floor (driven by
+// scroll), MEET center-stage in a warm pool of light, then settle and present while
+// the line lands and the frame resolves into the shop. The 3D scene (SkyScene)
+// carries the realistic models + IBL + reflection + real contact shadows + the
+// stride; CSS overlays add the warm spotlight glow, vignette, dust, a single soft
+// gold meet-ring, and the gentle warm flood transition (cheap — no GPU post burst).
+//
+// PERF: the canvas frameloop is gated to in-view, so it only renders on-screen —
+// never alongside the vault canvas (different scroll depths) or the shop. Lean
+// scene (demand-render, low DPR, ~270KB meshopt models). Scroll read from a cached
+// offset. Mobile (no WebGL) → the premium themed render as a static shot.
+export default function SkyBridge() {
+  const sectionRef = useRef<HTMLElement>(null)
+  const scrollProgress = useRef(0) // 0..1, consumed by SkyScene's useFrame
+  const copyRef = useRef<HTMLDivElement>(null)
+  const resolveRef = useRef<HTMLDivElement>(null)
+  const enterRef = useRef<HTMLDivElement>(null)
+  const chargeRef = useRef<HTMLDivElement>(null)
+  const glowRef = useRef<HTMLDivElement>(null)
+  // The documented "meet-ring" climax — a single gold ring that expands once the moment the two
+  // pieces meet (p≈0.5). One-shot, re-armed on scroll-back. The .meet-ring keyframe already exists.
+  const ringRef = useRef<HTMLDivElement>(null)
+  const ringFired = useRef(false)
+  // invalidate hook kept for API symmetry with SkyScene (frameloop is "always" while rendering).
+  const invalidateRef = useRef<(() => void) | null>(null)
+  const lastRenderedP = useRef(-1)
+  // Damped scroll (mirrors VaultExperience) — smooths coarse mouse-wheel steps so
+  // the stride / settle glide instead of snapping between discrete poses.
+  const damped = useRef(-1)
+  const lastT = useRef(0)
+
+  // `warm` = the finale is APPROACHING (mount-adjacent — the scene runs a one-time warm-up
+  // render burst so it bakes its env + uploads its GLBs + compiles shaders behind the black
+  // entrance overlay, and the music bed leads in). `render` = the finale is the ON-SCREEN
+  // subject (drives the frameloop + the scroll-driven pose). Splitting them stops the heavy
+  // canvas from rendering a full viewport EARLY (on top of the vault's membership beat → the
+  // image-3 lag) or a full viewport LATE (on top of the unboxing <video> below → the image-4
+  // video lag). `render` is computed from scroll-p in the driver below, not from a wide IO.
+  const [warm, setWarm] = useState(false)
+  const [render, setRender] = useState(false)
+  const renderRef = useRef(false)
+  const [reduced, setReduced] = useState(false)
+  const [mobile, setMobile] = useState(false)
+  // Keep the ambient MUSIC BED playing through the finale (not just the vault). The
+  // shared registry ORs this with the vault + video sections, so the same track that
+  // plays in the vault carries straight into "The Meeting" — no separate cue. (The
+  // old synth `ney`/`chime` cues were removed: they sounded cheap AND ducked the bed
+  // −6 dB, so you heard the awful placeholder instead of the music.) Driven by `warm`
+  // (a touch wider than the render window) so the music leads in/out around the scene.
+  useBedSection(!mobile && warm)
+  const rafId = useRef(0)
+  const offset = useRef(0)
+  const span = useRef(1)
+
+  useEffect(() => {
+    const mqR = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const mqM = window.matchMedia('(max-width: 640px) and (pointer: coarse)')
+    const u = () => {
+      setReduced(mqR.matches)
+      setMobile(mqM.matches)
+    }
+    u()
+    mqR.addEventListener('change', u)
+    mqM.addEventListener('change', u)
+    return () => {
+      mqR.removeEventListener('change', u)
+      mqM.removeEventListener('change', u)
+    }
+  }, [])
+
+  useEffect(() => {
+    const m = () => {
+      const el = sectionRef.current
+      if (!el) return
+      offset.current = el.offsetTop
+      span.current = Math.max(1, el.offsetHeight - window.innerHeight)
+    }
+    m()
+    window.addEventListener('resize', m)
+    return () => window.removeEventListener('resize', m)
+  }, [])
+
+  useEffect(() => {
+    const el = sectionRef.current
+    if (!el) return
+    // WARM-UP observer — flips `warm` ~0.9 viewport EARLY so the scene mounts + runs its one-time
+    // warm-up render burst (env bake + GLB upload + shader compile) while still hidden behind the
+    // black entrance overlay, and the music bed leads in. It does NOT drive the render loop — the
+    // tight `render` gate (computed from scroll-p in the driver below) does, so the heavy loop no
+    // longer over-extends a full viewport onto the vault's membership beat or the unboxing video.
+    // rootMargin tightened 90%→30%: the warm-up burst (env bake + GLB upload + shader compile)
+    // now fires only ~0.3vp early instead of ~0.9vp, AND the vault force-parks on `warm` (see the
+    // okhtein:finale-warming dispatch below) — so the two heavy WebGL canvases NEVER co-render.
+    // That co-render was the real multi-hundred-ms scroll FREEZE the user reported.
+    const warmObs = new IntersectionObserver(
+      ([e]) => setWarm(e.isIntersecting),
+      { threshold: 0, rootMargin: '30% 0px 30% 0px' }
+    )
+    // HEADER observer — fade the store header to full-bleed the cinematic frame ONLY when the
+    // finale is actually on screen (kept on real intersection so the header doesn't vanish early).
+    const head = new IntersectionObserver(
+      ([e]) => window.dispatchEvent(new CustomEvent('okhtein:finale', { detail: e.isIntersecting })),
+      { threshold: 0 }
+    )
+    warmObs.observe(el)
+    head.observe(el)
+    return () => {
+      warmObs.disconnect()
+      head.disconnect()
+      window.dispatchEvent(new CustomEvent('okhtein:finale', { detail: false }))
+    }
+  }, [])
+
+  // Park the vault as soon as the finale begins WARMING UP (not just when it renders) — the
+  // vault is by then at its last exit frame, scrolling away under the black entrance overlay,
+  // so freezing it is invisible, and it guarantees the warm-up burst never co-renders the vault.
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('okhtein:finale-warming', { detail: warm }))
+  }, [warm])
+  useEffect(
+    () => () => { window.dispatchEvent(new CustomEvent('okhtein:finale-warming', { detail: false })) },
+    []
+  )
+
+  // Scroll driver — writes scrollProgress (the 3D scene reads it) + the DOM overlay
+  // (soft ring at the meeting, copy fade, warm flood, resolve-to-black) AND computes the
+  // tight `render` gate. Runs while `warm` (the finale neighbourhood) so the overlays + pose
+  // stay correct through the warm-up; the frameloop itself only spins while `render` is true.
+  useEffect(() => {
+    if (!warm) return
+    lastRenderedP.current = -1 // force a render on (re)entry
+    damped.current = -1 // re-seed the damped scroll (no intro sweep on re-entry)
+    lastT.current = performance.now()
+    let running = true
+    const frame = () => {
+      if (!running) return
+      const raw = clamp01((window.scrollY - offset.current) / span.current)
+      const now = performance.now()
+      const dt = Math.min((now - lastT.current) / 1000, 0.1)
+      lastT.current = now
+      if (damped.current < 0) damped.current = raw // seed without a sweep
+      // LIGHT damping (snappy ~3 frames) — smooths a coarse mouse-wheel tick without
+      // the laggy trail of heavy damping. Once within ε, SNAP to the target so the
+      // scene stops demand-rendering (no asymptotic tail of renders — that tail was
+      // the integrated-GPU "lag"), forcing one final invalidate so the snap draws.
+      damped.current += (raw - damped.current) * (1 - Math.exp(-70 * dt))
+      if (Math.abs(raw - damped.current) < 0.002 && damped.current !== raw) {
+        damped.current = raw
+        lastRenderedP.current = -1 // force the final exact-pose render
+      }
+      const p = damped.current
+      scrollProgress.current = p
+      // RENDER GATE — spin the frameloop ONLY while the finale frame is the on-screen subject:
+      // from the moment its top enters the viewport (≈vault p1.0, so it never co-renders the
+      // vault membership beat above) until it has dived to near-black (p≥0.98; resolveRef is
+      // ~88% opaque by then, so freezing the last frame under the darkening overlay is invisible)
+      // — which parks it BEFORE the FeaturedUnboxing <video> below decodes. setState only on a
+      // boundary cross (no per-frame React churn). The warm-up burst keeps re-entry smooth.
+      const shouldRender = window.scrollY + window.innerHeight > offset.current && p < 0.98
+      if (shouldRender !== renderRef.current) {
+        renderRef.current = shouldRender
+        setRender(shouldRender)
+      }
+      // Demand-render hook kept for API symmetry (the canvas runs frameloop="always" while
+      // rendering, so this is a no-op there); harmless.
+      if (Math.abs(p - lastRenderedP.current) > 0.0004) {
+        lastRenderedP.current = p
+        invalidateRef.current?.()
+      }
+      // Charge — the centre gathers warm energy as the pairs close in (p .3→.48),
+      // then eases off the instant the ring fires.
+      if (chargeRef.current) {
+        chargeRef.current.style.opacity = (clamp01((p - 0.3) / 0.18) * (p < 0.49 ? 1 : 0)).toFixed(3)
+      }
+      // HERO REVEAL — a warm bloom flares at the exact meeting (p≈0.5) then settles, so
+      // the moment the pairs meet lands as a held cinematic beat (pairs with the 3D key
+      // swell). Gaussian, screen-blended → adds light like a real bloom. Compositor-cheap.
+      if (glowRef.current) {
+        glowRef.current.style.opacity = (Math.exp(-(((p - 0.5) / 0.075) ** 2)) * 0.92).toFixed(3)
+      }
+      // Meet-ring: fire the one-shot expanding ring exactly as the pieces meet (p≥0.5); re-arm on
+      // scroll-back (p<0.4) so it replays. The CSS .burst class drives the existing keyframe.
+      if (ringRef.current) {
+        if (p >= 0.5 && !ringFired.current) {
+          ringFired.current = true
+          ringRef.current.classList.add('burst')
+        } else if (p < 0.4 && ringFired.current) {
+          ringFired.current = false
+          ringRef.current.classList.remove('burst')
+        }
+      }
+      if (copyRef.current) {
+        const fin = clamp01((p - 0.54) / 0.12)
+        const fout = p > 0.9 ? clamp01(1 - (p - 0.9) / 0.1) : 1
+        copyRef.current.style.opacity = (fin * fout).toFixed(3)
+      }
+      // ENTRANCE: the room fades UP from black over the first ~12%, EASED (smoothstep) so the
+      // reveal glides instead of ramping linearly — a soft cinematic open from the vault. The
+      // canvas is already warm (rootMargin warm-up) so the reveal shows a smooth scene, not a hitch.
+      if (enterRef.current) enterRef.current.style.opacity = (1 - smooth(clamp01(p / 0.15))).toFixed(3)
+      // EXIT: a clean fade to BLACK as the camera dives in (p .84→1), seamless into the
+      // dark shop below. (The old warm-orange flood read as a flash + clashed with the
+      // dark theme — removed.)
+      if (resolveRef.current) resolveRef.current.style.opacity = clamp01((p - 0.84) / 0.16).toFixed(3)
+      rafId.current = requestAnimationFrame(frame)
+    }
+    rafId.current = requestAnimationFrame(frame)
+    return () => {
+      running = false
+      cancelAnimationFrame(rafId.current)
+      // Leaving the finale neighbourhood → park the render loop (belt-and-braces; the gate
+      // above usually parks it first via p≥0.98 / scroll-out).
+      if (renderRef.current) {
+        renderRef.current = false
+        setRender(false)
+      }
+    }
+  }, [warm, reduced])
+
+  // Tell the vault to PARK its own render loop while the finale is actively rendering, so the
+  // two heavy WebGL canvases never run at once (the membership-beat lag). The finale only
+  // renders once it has taken over under the black bridge, so the (by-then off-screen,
+  // scrim-covered) vault freezing here is invisible. Mirrors the okhtein:finale channel.
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('okhtein:finale-active', { detail: render }))
+  }, [render])
+  useEffect(
+    () => () => {
+      window.dispatchEvent(new CustomEvent('okhtein:finale-active', { detail: false }))
+    },
+    []
+  )
+
+  return (
+    <section ref={sectionRef} aria-label="OKHTEIN — carry the bond" className="relative h-[240vh] w-full">
+      <div className="sticky top-0 h-screen w-full overflow-hidden bg-vault-black">
+        {/* The real 3D scene (or a premium static render on the no-WebGL mobile path) */}
+        {mobile ? (
+          <div className="absolute inset-0 bg-vault-black">
+            <Image
+              src="https://cdn.shopify.com/s/files/1/0285/5210/2027/files/Hexagon1_78dc1cfc-7e19-43a0-b07c-adc59c39d2b9.png"
+              alt="Okhtein — Palmette Hexagon Minaudiere"
+              fill
+              priority
+              sizes="100vw"
+              className="object-contain p-10 opacity-95"
+            />
+          </div>
+        ) : (
+          <div className="absolute inset-0">
+            <SkyScene scrollProgress={scrollProgress} active={render} warm={warm} reduced={reduced} invalidateRef={invalidateRef} />
+          </div>
+        )}
+
+        {/* Cinematic atmosphere over the canvas (cheap CSS — replaces GPU post, all
+            static gradients = composited once, zero per-frame cost): a volumetric
+            light shaft + warm spotlight cone from above, a pool on the shoes/floor,
+            and a deep vignette that sinks the niche into black. */}
+        <div
+          aria-hidden
+          className="absolute inset-0 pointer-events-none"
+          style={{
+            backgroundImage:
+              // A DEFINED cinematic spotlight shaft over the ring — a tight bright core beam
+              // + a wide soft halo — plus a DEEPER vignette that sinks the studio into shadow
+              // so the lit hero pairs pop (the premium 'arena spotlight' look). Compositor-cheap.
+              'radial-gradient(ellipse 12% 82% at 50% -8%, rgba(255,240,212,0.46), rgba(255,214,160,0.1) 34%, transparent 60%),' +
+              'radial-gradient(ellipse 42% 94% at 50% -2%, rgba(255,222,172,0.15), transparent 56%),' +
+              'radial-gradient(ellipse 100% 100% at 50% 42%, transparent 48%, rgba(0,0,0,0.5) 100%)',
+          }}
+        />
+
+        {/* Floating gold dust in the light beam — depth + atmosphere. Pure CSS
+            transform/opacity drift (compositor-only, no blur, no main-thread cost);
+            mounted only while in view and motion is allowed. */}
+        {render && !reduced && (
+          <div aria-hidden className="absolute inset-0 pointer-events-none overflow-hidden z-[4]">
+            {MOTES.map((m, i) => (
+              <span
+                key={i}
+                className="sky-mote absolute rounded-full"
+                style={{
+                  left: `${m.x}%`,
+                  top: `${m.y}%`,
+                  width: `${m.s}px`,
+                  height: `${m.s}px`,
+                  background: 'radial-gradient(circle, rgba(255,224,170,0.9), rgba(255,196,120,0.25) 55%, transparent 75%)',
+                  animationDuration: `${m.d}s`,
+                  animationDelay: `${m.delay}s`,
+                } as React.CSSProperties}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Fine film grain — a touch of editorial texture over the whole frame
+            (static, low opacity, normal blend → cheap). */}
+        <div
+          aria-hidden
+          className="absolute inset-0 pointer-events-none z-[4] opacity-[0.05] mix-blend-soft-light"
+          style={{
+            backgroundImage:
+              "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E\")",
+            backgroundSize: '140px 140px',
+          }}
+        />
+
+        {/* Charge — warm energy gathers at the meeting point before the pairs meet. */}
+        <div
+          ref={chargeRef}
+          aria-hidden
+          className="absolute inset-0 pointer-events-none z-[5]"
+          style={{ opacity: 0, backgroundImage: 'radial-gradient(ellipse 28% 26% at 50% 60%, rgba(255,216,150,0.5), rgba(255,184,104,0.12) 46%, transparent 72%)' }}
+        />
+
+        {/* MEET-RING — a single brass ring that expands once as the two pieces meet (the documented
+            climax; driven by the .burst toggle in the scroll frame above, animated by the existing
+            .meet-ring keyframe). Quiet-luxury: one ring, not a particle burst. */}
+        <div ref={ringRef} aria-hidden className="meet-burst absolute inset-0 z-[6] pointer-events-none flex items-center justify-center">
+          <span className="ring block w-[20vmin] h-[20vmin] rounded-full border border-vault-gold/70" />
+        </div>
+
+        {/* HERO bloom — a warm flare at the meeting (screen blend = adds light, not a
+            grey overlay) so the meet lands as a luminous reveal, then settles. */}
+        <div
+          ref={glowRef}
+          aria-hidden
+          className="absolute inset-0 pointer-events-none z-[6] mix-blend-screen"
+          style={{ opacity: 0, backgroundImage: 'radial-gradient(ellipse 66% 56% at 50% 50%, rgba(255,238,196,0.78), rgba(255,202,128,0.28) 40%, transparent 72%)' }}
+        />
+
+        {/* Copy + CTA (lands after the meeting, upper area) */}
+        <div className="absolute inset-0 z-10 h-full flex flex-col items-center justify-start pt-[11vh] px-6 text-center pointer-events-none">
+          <div ref={copyRef} className="flex flex-col items-center gap-4 max-w-2xl" style={{ opacity: 0 }}>
+            <p className="text-[10px] sm:text-[11px] tracking-[0.45em] uppercase text-vault-gold/85 [text-shadow:0_1px_10px_rgba(0,0,0,0.7)]">OKHTEIN · Cairo</p>
+            <h2 className="font-display text-4xl sm:text-6xl font-semibold tracking-display text-vault-cream leading-[0.98] [text-shadow:0_2px_26px_rgba(0,0,0,0.7)]">
+              Carry the bond.
+            </h2>
+            <span aria-hidden className="block w-16 h-px bg-gradient-to-r from-transparent via-vault-gold/60 to-transparent" />
+            <p className="text-sm sm:text-base text-vault-cream/80 max-w-md leading-relaxed [text-shadow:0_1px_14px_rgba(0,0,0,0.8)]">
+              The sisters&rsquo; mark, made to hold — brass cast and leather cut by hand in Cairo.
+            </p>
+            <Link
+              href="#new-arrivals"
+              className="pointer-events-auto mt-2 px-8 py-3.5 text-xs tracking-[0.2em] uppercase font-medium bg-vault-gold text-vault-black hover:bg-vault-cream transition-colors duration-200 rounded-sm shadow-[0_10px_34px_rgba(0,0,0,0.5)]"
+            >
+              Explore the collections ↓
+            </Link>
+          </div>
+        </div>
+
+        {/* ENTRANCE fade — the room reveals UP from black as you scroll in from the vault. */}
+        <div ref={enterRef} aria-hidden className="absolute inset-0 z-[19] bg-vault-black pointer-events-none" style={{ opacity: 1 }} />
+        {/* EXIT — a clean fade to black as the camera dives in, seamless into the shop. */}
+        <div ref={resolveRef} aria-hidden className="absolute inset-0 z-20 bg-vault-black pointer-events-none" style={{ opacity: 0 }} />
+      </div>
+    </section>
+  )
+}

@@ -1,0 +1,484 @@
+'use client'
+
+import { useRef, useEffect, useState, Component, type ReactNode } from 'react'
+import dynamic from 'next/dynamic'
+import VaultOverlay from './VaultOverlay'
+import VaultPreloader from './VaultPreloader'
+import Link from 'next/link'
+import Lenis from 'lenis'
+import { audioEngine } from '@/lib/audioEngine'
+import { useBedSection } from '@/lib/audio'
+
+const VaultCanvas = dynamic(() => import('./VaultCanvas'), { ssr: false })
+
+function VaultStatic() {
+  return (
+    <div className="relative h-screen flex items-center justify-center bg-vault-black px-6 overflow-hidden">
+      {/* Warm Okhtein backdrop so the no-WebGL / phone path still feels like the lit
+          atelier, not a plain black page — a pure CSS brass-and-stone glow (no image
+          asset, nothing to load). */}
+      <div
+        aria-hidden
+        className="absolute inset-0"
+        style={{
+          background:
+            'radial-gradient(ellipse 80% 60% at 50% 36%, rgba(199,188,163,0.16), transparent 70%), radial-gradient(ellipse 90% 70% at 50% 100%, rgba(160,166,180,0.10), transparent 70%), #121110',
+        }}
+      >
+        <div className="absolute inset-0 bg-gradient-to-b from-vault-black/55 via-transparent to-vault-black" />
+      </div>
+      <div className="relative z-10 flex flex-col items-center text-center gap-8 max-w-2xl">
+        <p className="text-[10px] tracking-[0.4em] uppercase text-vault-gold/80">
+          OKHTEIN · Cairo
+        </p>
+        <h1 className="font-display text-5xl sm:text-8xl font-semibold tracking-tight text-vault-cream leading-[0.95]">
+          Carryable Art
+        </h1>
+        <p className="text-sm text-vault-muted max-w-md">
+          Two sisters. Brass and leather. Carryable art, handcrafted in Cairo.
+        </p>
+        <div className="flex flex-col sm:flex-row gap-3">
+          <Link
+            href="#new-arrivals"
+            className="px-8 py-3 text-xs tracking-[0.2em] uppercase font-medium bg-vault-gold text-vault-black hover:bg-vault-cream transition-colors duration-200 rounded-sm"
+          >
+            Shop New Arrivals
+          </Link>
+          <Link
+            href="#drop-wall"
+            className="px-8 py-3 text-xs tracking-[0.2em] uppercase font-medium border border-vault-gold/40 text-vault-gold hover:bg-vault-gold/10 transition-colors duration-200 rounded-sm"
+          >
+            Browse the House
+          </Link>
+        </div>
+        <div className="flex flex-wrap justify-center gap-6 mt-4 text-[10px] tracking-[0.15em] uppercase text-vault-muted">
+          <span>✓ Handcrafted in Cairo</span>
+          <span>✓ Brass &amp; Leather</span>
+          <span>✓ Worldwide Shipping</span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Static dark-vault backdrop shown if WebGL fails to initialise or the context is
+// lost, so the canvas slot degrades to a warm lit room instead of a blank void —
+// the DOM overlay copy + scroll still work over it.
+function VaultFailBackdrop() {
+  return (
+    <div
+      aria-hidden
+      className="absolute inset-0"
+      style={{
+        background:
+          'radial-gradient(ellipse 70% 50% at 50% 42%, rgba(199,188,163,0.13), transparent 70%), radial-gradient(ellipse 90% 60% at 50% 100%, rgba(160,166,180,0.08), transparent 70%), #0B0B0A',
+      }}
+    />
+  )
+}
+
+// Error boundary: a failed WebGL context (no-WebGL browser, lost context, driver
+// crash) renders the static backdrop instead of throwing a blank screen.
+class WebGLBoundary extends Component<{ fallback: ReactNode; children: ReactNode }, { failed: boolean }> {
+  state = { failed: false }
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+  render() {
+    return this.state.failed ? this.props.fallback : this.props.children
+  }
+}
+
+// ── Camera pacing ────────────────────────────────────────────────────────────
+// Reparametrize linear scroll so the walk DWELLS on its two money shots — the
+// hero plinth (~0.46) and the membership reveal (~0.95) — and moves a touch
+// quicker through the transit between them, instead of gliding at one constant
+// "museum-tour" velocity. Built as the normalized integral of a speed profile
+// that dips at those beats, which makes it GUARANTEED strictly monotonic (scroll
+// can never stick or reverse) with ease(0)=0, ease(1)=1. Both the camera curve
+// AND the overlay captions read the same eased progress, so they stay in sync —
+// the whole beat lingers together. Deliberately modest (~35% slow-down); deepen
+// the `amt` values for a more pronounced hold. NOTE: this only changes traversal
+// VELOCITY, not any keyframe framing, so it isn't visible in a static screenshot
+// — only felt while scrolling.
+const DWELL_LUT = (() => {
+  const N = 240
+  const lut = new Float32Array(N + 1)
+  const gauss = (p: number, c: number, w: number, amt: number) =>
+    amt * Math.exp(-((p - c) * (p - c)) / (2 * w * w))
+  const speed = (p: number) =>
+    Math.max(
+      0.32,
+      1 - gauss(p, 0.39, 0.06, 0.55) - gauss(p, 0.68, 0.05, 0.3) - gauss(p, 0.88, 0.07, 0.5)
+    )
+  let acc = 0
+  for (let i = 0; i < N; i++) {
+    acc += speed(i / N)
+    lut[i + 1] = acc
+  }
+  for (let i = 0; i <= N; i++) lut[i] /= acc // normalize → lut[0]=0, lut[N]=1
+  return lut
+})()
+function dwellEase(p: number): number {
+  if (p <= 0) return 0
+  if (p >= 1) return 1
+  const x = p * 240
+  const i = Math.floor(x)
+  const f = x - i
+  return DWELL_LUT[i] * (1 - f) + DWELL_LUT[i + 1] * f
+}
+
+export default function VaultExperience() {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const scrollProgress = useRef(0)
+  const rafRef = useRef<number>(0)
+  const progressFillRef = useRef<HTMLDivElement>(null)
+  const [fallback, setFallback] = useState(false)
+  const [reduced, setReduced] = useState(false)
+  const reducedRef = useRef(false) // mirror for the tick() closure (which is keyed on [fallback], not reduced)
+  // Render-gate for the WebGL canvas: true while the vault is on-screen, false
+  // once it scrolls out of view below the fold (or the tab is hidden). Drives
+  // <VaultCanvas active> → frameloop, so the heavy scene stops rendering while
+  // the user shops. The ref mirrors state so the rAF tick avoids redundant
+  // re-renders (only flips React state on a boundary crossing).
+  const [vaultVisible, setVaultVisible] = useState(true)
+  const vaultVisibleRef = useRef(true)
+  const motionProgRef = useRef(0)
+  // True while the finale ("The Meeting") canvas is actively rendering (SkyBridge dispatches
+  // `okhtein:finale-active`). The vault FORCE-PARKS its own render loop whenever this is set, so
+  // the two heavy WebGL canvases never run at once (the membership-beat lag). The finale only
+  // turns this on once it has taken over under the black bridge, so the (by-then off-screen,
+  // scrim-covered, scroll-clamped-at-end) vault freezing here is invisible.
+  const finaleActiveRef = useRef(false)
+
+  // Serve the lightweight static hero ONLY to true phones (small screen + touch).
+  // Coarse-pointer gating keeps iPads AND laptops on the rich 3D walk.
+  //
+  // reduced-motion no longer forces the static hero. Windows laptops VERY commonly
+  // report prefers-reduced-motion (battery saver / "animation effects off", usually
+  // unintentionally), and the old `mqReduce || mqMobile` gate was hiding the entire
+  // vault from capable 14" laptops → "a plain site like mobile". The vault is
+  // scroll-DRIVEN (user-controlled, not an auto fly-through), so it's acceptable
+  // under reduced-motion. We still track `reduced`: VaultStatic drops its Ken-Burns
+  // drift for phone RM users, AND it's passed into <VaultCanvas> so the mounted
+  // vault freezes its incidental auto-motion (hero turntable, drifting dust, the
+  // hero scan-light, the audio-reactive emissive pulse) while keeping the
+  // scroll-driven camera (user-controlled) and the screen videos (content).
+  // Restart the cinematic at the entrance on every (re)load. By default browsers
+  // RESTORE the prior scroll position on refresh/back — which drops the visitor
+  // mid-walk (e.g. the promenade) instead of the "Carryable Art" entrance, reading
+  // as the scene "auto-turning" to a different state the instant the page settles.
+  // 'manual' hands scroll control to us; we only force-top when there's no deep-link
+  // hash, so anchor navigation (#new-arrivals etc.) still lands correctly.
+  useEffect(() => {
+    if (typeof history !== 'undefined' && 'scrollRestoration' in history) {
+      history.scrollRestoration = 'manual'
+    }
+    if (!window.location.hash) window.scrollTo(0, 0)
+  }, [])
+
+  useEffect(() => {
+    const mqReduce = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const mqMobile = window.matchMedia('(max-width: 640px) and (pointer: coarse)')
+    const update = () => {
+      setReduced(mqReduce.matches)
+      reducedRef.current = mqReduce.matches
+      setFallback(mqMobile.matches)
+    }
+    update()
+    mqReduce.addEventListener('change', update)
+    mqMobile.addEventListener('change', update)
+    return () => {
+      mqReduce.removeEventListener('change', update)
+      mqMobile.removeEventListener('change', update)
+    }
+  }, [])
+
+  // Mutual exclusion with the finale: park the vault loop while the finale is WARMING UP or
+  // actively RENDERING, so the two heavy WebGL canvases never run at once (the real scroll-freeze
+  // root cause). finaleActiveRef = warming OR render-active; the per-frame tick also reads it, so
+  // the vault can't immediately un-park while the finale is live. Listeners mutate refs (mount-stable).
+  const finaleWarmingRef = useRef(false)
+  const finaleRenderRef = useRef(false)
+  useEffect(() => {
+    const apply = () => {
+      const on = finaleWarmingRef.current || finaleRenderRef.current
+      finaleActiveRef.current = on
+      if (on && vaultVisibleRef.current) {
+        vaultVisibleRef.current = false
+        setVaultVisible(false)
+      }
+    }
+    const onWarming = (e: Event) => { finaleWarmingRef.current = !!(e as CustomEvent).detail; apply() }
+    const onActive = (e: Event) => { finaleRenderRef.current = !!(e as CustomEvent).detail; apply() }
+    window.addEventListener('okhtein:finale-warming', onWarming as EventListener)
+    window.addEventListener('okhtein:finale-active', onActive as EventListener)
+    return () => {
+      window.removeEventListener('okhtein:finale-warming', onWarming as EventListener)
+      window.removeEventListener('okhtein:finale-active', onActive as EventListener)
+    }
+  }, [])
+
+  // Ambient bed: report the vault as a "bed section" (audible while the WebGL vault
+  // is on-screen, never on the static fallback). The shared registry in AudioProvider
+  // ORs this with the finale + video sections, so the music now carries ACROSS them
+  // instead of dying the instant the vault scrolls off. (Must NOT call setBedActive
+  // directly here — vaultVisible flips false past the vault and would kill the bed.)
+  useBedSection(!fallback && vaultVisible)
+
+  useEffect(() => {
+    if (fallback) return
+
+    const container = containerRef.current
+    if (!container) return
+
+    // Smooth scroll (Lenis) tames the jagged Windows-trackpad feel on this heavy
+    // scene. It scrolls the REAL window (not a CSS transform), so position:sticky
+    // and the getBoundingClientRect read below stay correct, and it snaps to
+    // programmatic/anchor jumps (kept instant by scroll-behavior:auto) rather
+    // than easing them through the 700vh walk. Reduced-motion / mobile users
+    // never reach here (they get VaultStatic), so Lenis is correctly skipped.
+    const lenis = new Lenis({ lerp: 0.075, smoothWheel: true, wheelMultiplier: 0.85 })
+
+    // One damped scroll value drives BOTH the camera (via scrollProgress) and
+    // the DOM overlay, so copy and 3D glide together instead of the overlay
+    // snapping to raw scroll while the camera eases behind it.
+    let damped = -1
+    let lastT = performance.now()
+    // Lenis already smooths the scroll input, so this secondary damping is kept
+    // light (near-transparent) — stacking two heavy easings felt laggy. The
+    // camera's own useFrame lerp still provides the visible glide along the path.
+    // SCROLL SMOOTHNESS FIX (was 30 ≈ 33ms snap → the camera snapped beat-to-beat per wheel notch,
+    // reading as "two views switching"). Lowered so the camera GLIDES (~100ms) continuously through the
+    // discrete wheel notches → a smooth cinematic dolly instead of stepping between beats.
+    const SCROLL_DECAY = 10
+
+    // Cache the vault's document-space bottom so the per-frame tick can detect
+    // "scrolled past into the shop" from window.scrollY alone — avoiding a
+    // getBoundingClientRect (forced layout) + all scene work every frame while
+    // the user is down in the flat shop (a continuous tax on the shop's scroll).
+    let vaultBottom = container.offsetTop + container.offsetHeight
+    const onVaultResize = () => {
+      vaultBottom = container.offsetTop + container.offsetHeight
+    }
+    window.addEventListener('resize', onVaultResize)
+
+    // Cache each overlay scene ONCE — its element, its `.vault-copy` child, and its
+    // parsed beat range — so the per-frame tick never re-queries the DOM or re-parses
+    // data attributes. `last` tracks the written opacity so we only touch the DOM when
+    // it actually moves (the ~5-of-7 scenes pinned at 0 are skipped entirely).
+    const scenes = Array.from(
+      container.querySelectorAll<HTMLElement>('.vault-scene-section')
+    ).map((el) => {
+      const from = parseFloat(el.dataset.sceneFrom ?? '0')
+      const to = parseFloat(el.dataset.sceneTo ?? '1')
+      return { el, copy: el.querySelector<HTMLElement>('.vault-copy'), from, to, fadeLen: (to - from) * 0.3, last: -1 }
+    })
+
+    // The scroll cue is only meaningful at the entrance, and the trust bar
+    // should bow out just before the vault hands off to the flat shop so
+    // neither bleeds over the sections below. Cache both once.
+    const cueEl = container.querySelector<HTMLElement>('[data-scroll-cue]')
+    const trustEl = container.querySelector<HTMLElement>('[data-trust-bar]')
+    const scrimEl = container.querySelector<HTMLElement>('[data-vault-scrim]')
+
+    // Update scroll progress and overlay on each frame
+    function tick() {
+      if (!container) return
+      // Frame-rate-independent damping: consistent feel regardless of FPS.
+      const now = performance.now()
+      lenis.raf(now) // advance Lenis on the same frame, before reading the rect
+      // Cheap off-screen fast-path: once scrolled past the vault (down in the
+      // shop), do NOTHING but keep Lenis ticking for global smooth scroll — no
+      // getBoundingClientRect (forced layout), no scene/overlay/audio work. This
+      // is mathematically the old `rect.bottom <= -0.3vh` park condition computed
+      // from window.scrollY, so the heavy page below the vault stops paying for
+      // the vault's scroll driver on every frame.
+      if (window.scrollY >= vaultBottom + window.innerHeight * 0.3) {
+        if (vaultVisibleRef.current) {
+          vaultVisibleRef.current = false
+          setVaultVisible(false)
+          // Kill the scroll-velocity "wind": this fast-path stops calling setMotion,
+          // so without this the wind gain FREEZES at its last (non-zero, if you
+          // scrolled in fast) value and drones like an engine through the finale +
+          // video below. Ramp it to silence once on the way out.
+          audioEngine.setMotion(0)
+        }
+        lastT = now
+        rafRef.current = requestAnimationFrame(tick)
+        return
+      }
+      const dt = Math.min((now - lastT) / 1000, 0.1)
+      lastT = now
+      const rect = container.getBoundingClientRect()
+      // Park the render loop almost as soon as the vault scrolls off the top —
+      // keep only a SMALL 0.3-viewport pre-warm below so scroll-back doesn't show a
+      // black gap. The old 1-viewport buffer kept the (now HIGH-tier) scene
+      // rendering at full cost for a whole screen-height INTO the flat shop, which
+      // is exactly the vault→shop transition stutter: the heavy scene composited on
+      // top of the incoming storefront. 0.3vh still pre-warms a frame or two before
+      // re-entry. The rect we already have makes this free; only flip React state on
+      // a boundary cross. (Hidden tabs are handled by the browser throttling rAF.)
+      const vh = window.innerHeight
+      // While the finale is rendering, the vault stays parked regardless of its own rect (so the
+      // tick can't fight the force-park) — the two heavy canvases never co-render.
+      const onScreen = !finaleActiveRef.current && rect.bottom > -vh * 0.3 && rect.top < vh * 2
+      if (onScreen !== vaultVisibleRef.current) {
+        vaultVisibleRef.current = onScreen
+        setVaultVisible(onScreen)
+      }
+      const scrollableHeight = container.offsetHeight - window.innerHeight
+      const scrolled = Math.max(0, -rect.top)
+      const rawTarget = Math.max(0, Math.min(1, scrolled / scrollableHeight))
+      // Seed without an intro sweep if the page loads already scrolled.
+      if (damped < 0) damped = rawTarget
+      damped += (rawTarget - damped) * (1 - Math.exp(-SCROLL_DECAY * dt))
+      // Dev-only override for live screenshot verification: set
+      // window.__vaultForce to a 0–1 number to pin the camera + overlay to any
+      // beat regardless of scroll. Inert unless the global is set.
+      const forced = (window as unknown as { __vaultForce?: number }).__vaultForce
+      // Ease ONLY the real scroll (dwell on the hero + membership beats). The dev
+      // __vaultForce hook stays a DIRECT curve-param control for screenshot checks.
+      const progress = typeof forced === 'number' ? forced : dwellEase(damped)
+      scrollProgress.current = progress
+      // Dev-only: expose live eased progress so the slow-scroll harness can verify VELOCITY changes
+      // (dwell) that __vaultForce can't show (it bypasses dwellEase). Inert in normal use.
+      ;(window as unknown as { __progress?: number }).__progress = progress
+
+      // Scroll-motion audio — a soft "air" whoosh whose level + brightness track
+      // how fast you're moving through the vault. Movement is what you hear; at
+      // rest only the faint ambient bed remains. Skipped under reduced-motion so a
+      // reduced-motion user isn't ambushed by a scroll-driven synth (WCAG 2.2.2).
+      if (!reducedRef.current) audioEngine.setMotion(Math.abs(progress - motionProgRef.current))
+      motionProgRef.current = progress
+
+      // Update overlay section opacities — only writing to the DOM when a scene's
+      // opacity actually moves (most sit pinned at 0), with NO per-frame DOM query
+      // or data-attr parse (both cached above).
+      for (const s of scenes) {
+        let opacity = 0
+        if (progress >= s.from && progress <= s.to) {
+          // First scene starts fully visible; last scene stays visible at the end.
+          const inFade = s.from <= 0 ? 1 : Math.min(1, (progress - s.from) / s.fadeLen)
+          const outFade = s.to >= 1 ? 1 : Math.min(1, (s.to - progress) / s.fadeLen)
+          opacity = Math.max(0, Math.min(inFade, outFade))
+        }
+        if (Math.abs(opacity - s.last) < 0.002) continue // unchanged → skip the DOM write
+        s.last = opacity
+        s.el.style.opacity = opacity.toFixed(3)
+        // Keep invisible beats out of the tab order + AT tree (WCAG 2.4.3 / 4.1.2).
+        ;(s.el as HTMLElement & { inert: boolean }).inert = opacity < 0.05
+        // Scroll-driven reveal: copy rises into place as the scene fades in.
+        if (s.copy) s.copy.style.transform = `translate3d(0, ${((1 - opacity) * 22).toFixed(1)}px, 0)`
+      }
+
+      // Drive the story progress indicator.
+      if (progressFillRef.current) {
+        progressFillRef.current.style.transform = `scaleY(${progress})`
+      }
+
+      // Scroll cue fades out as soon as the walk begins; the trust bar fades in
+      // the final stretch so neither lingers over the flat shop below the vault.
+      if (cueEl) cueEl.style.opacity = String(Math.max(0, 1 - progress / 0.08))
+      if (trustEl) {
+        trustEl.style.opacity = String(
+          Math.max(0, Math.min(1, (0.97 - progress) / 0.04))
+        )
+      }
+      // Fade-to-black bridge: the walk resolves INTO black over the last 5% so the
+      // storefront below (same vault-black bg) "lights up" from the dark instead of
+      // hard-cutting. Peaks after the membership copy so the finale reads first.
+      if (scrimEl) {
+        // Darken-not-blackout: cap at ~0.5 so the finale frame stays VISIBLE as the
+        // sticky viewport scrolls away. The vault→shop seam then reads as a dim
+        // vignette bridge instead of a full-viewport black void (the "big gap" —
+        // the sticky takes a whole 100vh to release, and a fully-opaque scrim made
+        // that entire stretch dead black). The storefront still rises out of dusk.
+        scrimEl.style.opacity = String(
+          // Finale (two-sisters meeting + copy) stays fully clear through the beat, then
+          // deepens to a near-dark dusk over the last ~3.5% so the vault dims as it
+          // scrolls away and the shop emerges from black — a clean wipe, not a
+          // half-lit hard cut into the flat storefront.
+          Math.max(0, Math.min(0.82, (progress - 0.965) / 0.035))
+        )
+      }
+
+      rafRef.current = requestAnimationFrame(tick)
+    }
+
+    rafRef.current = requestAnimationFrame(tick)
+
+    // Nudge the WebGL canvas/postprocessing to composite on first load —
+    // otherwise the entrance can paint black until the first scroll/resize.
+    const t1 = setTimeout(() => window.dispatchEvent(new Event('resize')), 120)
+    const t2 = setTimeout(() => window.dispatchEvent(new Event('resize')), 600)
+
+    return () => {
+      cancelAnimationFrame(rafRef.current)
+      clearTimeout(t1)
+      clearTimeout(t2)
+      window.removeEventListener('resize', onVaultResize)
+      audioEngine.setMotion(0) // defense in depth — never leave the wind droning
+      lenis.destroy()
+    }
+  }, [fallback])
+
+  return (
+    <section id="vault-walk" aria-label="OKHTEIN Atelier experience">
+      {fallback ? (
+        <VaultStatic />
+      ) : (
+      <>
+      <VaultPreloader />
+      <div ref={containerRef} style={{ height: '1100vh' }} className="relative">
+        {/* Sticky viewport */}
+        <div className="sticky top-0 h-screen w-full overflow-hidden">
+          {/* 3D canvas */}
+          <div className="absolute inset-0">
+            <WebGLBoundary fallback={<VaultFailBackdrop />}>
+              <VaultCanvas scrollProgress={scrollProgress} active={vaultVisible} reduced={reduced} />
+            </WebGLBoundary>
+          </div>
+
+          {/* DOM overlays */}
+          <div className="absolute inset-0">
+            <VaultOverlay scrollProgress={scrollProgress} />
+          </div>
+
+          {/* Story progress indicator */}
+          <div className="absolute right-6 top-1/2 -translate-y-1/2 z-10 h-32 w-px bg-vault-cream/10">
+            <div
+              ref={progressFillRef}
+              className="w-full origin-top bg-gradient-to-b from-vault-gold to-vault-gold/40"
+              style={{ height: '100%', transform: 'scaleY(0)' }}
+            />
+          </div>
+
+          {/* Trust bar — fades out just before the vault hands off to the flat shop. */}
+          <div
+            data-trust-bar
+            style={{ willChange: 'opacity' }}
+            className="absolute bottom-0 left-0 right-0 z-10 py-4 px-6"
+          >
+            <div className="flex justify-center gap-8 text-[9px] tracking-[0.2em] uppercase text-vault-muted">
+              <span>Handcrafted in Cairo</span>
+              <span className="hidden sm:inline">Brass &amp; Leather</span>
+              <span>Carryable Art</span>
+              <span className="hidden sm:inline">Worldwide Shipping</span>
+            </div>
+          </div>
+
+          {/* Fade-to-black bridge: vault resolves into black so the storefront lights up from it */}
+          <div
+            data-vault-scrim
+            aria-hidden
+            style={{ opacity: 0, willChange: 'opacity' }}
+            className="pointer-events-none absolute inset-0 z-20 bg-vault-black"
+          />
+        </div>
+      </div>
+      </>
+      )}
+    </section>
+  )
+}

@@ -1,0 +1,13 @@
+import { chromium } from 'playwright'
+const b = await chromium.launch({ channel: 'chrome', headless: false, args: ['--start-maximized'] })
+const p = await b.newPage({ viewport: { width: 1440, height: 810 } })
+await p.goto('http://localhost:5000/', { waitUntil: 'load', timeout: 90000 })
+await p.bringToFront(); await p.waitForTimeout(4000)
+await p.evaluate(()=>{ const max=document.body.scrollHeight-window.innerHeight; window.scrollTo(0, max*0.07) })
+await p.waitForTimeout(1500)
+const before = await p.evaluate(()=>window.scrollY)
+await p.reload({ waitUntil: 'load', timeout: 90000 })
+await p.bringToFront(); await p.waitForTimeout(2500)
+const after = await p.evaluate(()=>window.scrollY)
+console.log('scrollY before reload:', Math.round(before), '| after reload:', Math.round(after), '| restoration:', after < 5 ? 'FIXED (restarts at entrance)' : 'STILL RESTORING')
+await b.close()

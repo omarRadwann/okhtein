@@ -1,0 +1,229 @@
+'use client'
+
+import { useState, useEffect } from 'react'
+import Link from 'next/link'
+import { cn } from '@/lib/cn'
+import { useCart } from '@/lib/cart'
+import { useAudio } from '@/lib/audio'
+import CartDrawer from '@/components/commerce/CartDrawer'
+import QuickView from '@/components/commerce/QuickView'
+import SearchOverlay from '@/components/commerce/SearchOverlay'
+
+const navLinks = [
+  { label: 'Bags', href: '#bags' },
+  { label: 'Fine Jewelry', href: '#jewelry' },
+  { label: 'Accessories', href: '#accessories' },
+  { label: 'The Wall', href: '#drop-wall' },
+  { label: 'About', href: '#about' },
+]
+
+export default function Header() {
+  const [scrolled, setScrolled] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
+  // Fade the whole header out to full-bleed the cinematic finale ("The Meeting").
+  const [finaleActive, setFinaleActive] = useState(false)
+  const { count, setOpen } = useCart()
+  const { muted, started, toggle: toggleAudio } = useAudio()
+
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 40)
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => window.removeEventListener('scroll', onScroll)
+  }, [])
+
+  // SkyBridge dispatches `okhtein:finale` {detail:boolean} as the finale ("The Two
+  // Sisters") enters/leaves view; fade the header out over it so the cinematic
+  // frame is full-bleed, then fade it back in for the shop.
+  useEffect(() => {
+    const onFinale = (e: Event) => setFinaleActive(!!(e as CustomEvent).detail)
+    window.addEventListener('okhtein:finale', onFinale as EventListener)
+    return () => window.removeEventListener('okhtein:finale', onFinale as EventListener)
+  }, [])
+
+  // Escape closes the mobile menu.
+  useEffect(() => {
+    if (!menuOpen) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenuOpen(false) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [menuOpen])
+
+  return (
+    <>
+    <header
+      className={cn(
+        'fixed top-0 left-0 right-0 z-50 transition-all duration-500',
+        // During the finale, force a transparent bar so no chrome bleeds across the
+        // cinematic frame — but DON'T disable the whole header: the brand + nav links
+        // fade out (below), while the cart / mute / search actions stay reachable
+        // through the 400vh finale (a shopper mid-scene must still open their cart).
+        finaleActive || !scrolled
+          // Solid (no backdrop-blur): a fixed, always-visible blurred bar re-blurs
+          // the whole page every scroll frame — a major scroll-jank source on
+          // integrated GPUs. At 95% opacity the frosting was invisible anyway.
+          ? 'bg-transparent'
+          : 'bg-vault-black/95 border-b border-vault-gold/10'
+      )}
+    >
+      {/* Marketing announcement bar — a slim premium strip that markets OKHTEIN site-
+          wide. Lives INSIDE the fixed header so it inherits the transparent→solid scroll
+          state and the finale fade for free; collapses (max-h-0) during "The Meeting" so
+          the cinematic frame stays full-bleed. */}
+      <div
+        className={cn(
+          'overflow-hidden transition-all duration-500 ease-out',
+          finaleActive ? 'max-h-0 opacity-0' : 'max-h-10 opacity-100',
+          scrolled && !finaleActive && 'border-b border-vault-gold/10'
+        )}
+        aria-hidden={finaleActive}
+      >
+        <p className="py-2 text-center text-[10px] sm:text-[11px] tracking-[0.28em] uppercase text-vault-gold/90">
+          Carryable Art
+          <span className="mx-2.5 text-vault-gold/30">·</span>
+          <span className="text-vault-cream/70">Handcrafted in Cairo</span>
+          <span className="mx-2.5 text-vault-gold/30 hidden sm:inline">·</span>
+          <span className="text-vault-cream/70 hidden sm:inline">Worldwide Shipping</span>
+        </p>
+      </div>
+      <div className="mx-auto max-w-7xl px-6 lg:px-8">
+        <div className="flex h-16 items-center justify-between">
+          {/* Logo — fades over the finale (chrome), restores for the shop */}
+          <Link href="/" className={cn('flex items-center gap-2 group transition-opacity duration-500', finaleActive && 'opacity-0 pointer-events-none')}>
+            <span className="font-display text-xl font-semibold tracking-[0.2em] text-vault-cream group-hover:text-vault-gold transition-colors duration-300">
+              OKHTEIN
+            </span>
+            <span className="hidden sm:block text-[13px] text-vault-gold/50 mt-0.5 leading-none" aria-hidden="true">
+              أختين
+            </span>
+            <span className="hidden sm:block text-[10px] tracking-[0.15em] text-vault-gold/80 mt-0.5 uppercase">
+              Cairo
+            </span>
+          </Link>
+
+          {/* Desktop Nav — fades over the finale (chrome) */}
+          <nav className={cn('hidden md:flex items-center gap-8 transition-opacity duration-500', finaleActive && 'opacity-0 pointer-events-none')} aria-label="Main navigation">
+            {navLinks.map((link) => (
+              <Link
+                key={link.label}
+                href={link.href}
+                className="relative text-[13px] tracking-[0.15em] uppercase text-vault-cream/75 hover:text-vault-gold transition-colors duration-300 after:absolute after:left-0 after:-bottom-1 after:h-px after:w-0 after:bg-vault-gold/70 hover:after:w-full after:transition-all after:duration-300"
+              >
+                {link.label}
+              </Link>
+            ))}
+          </nav>
+
+          {/* Right actions — STAY reachable through the finale (cart/mute/search),
+              just dimmed so they don't compete with the cinematic frame. */}
+          <div className={cn('flex items-center gap-4 transition-opacity duration-500', finaleActive && 'opacity-70')}>
+            <button
+              onClick={toggleAudio}
+              aria-label={muted ? 'Unmute ambient sound' : 'Mute ambient sound'}
+              aria-pressed={!muted}
+              className={cn(
+                'text-vault-cream/70 hover:text-vault-gold hover:bg-vault-gold/10 rounded-full transition-colors duration-300 p-2',
+                // Nudge: while sound is ON but not yet started, pulse the speaker gold so the
+                // visitor knows one tap/key/click turns it on (browsers block audio on pure
+                // scroll). Stops the instant music plays.
+                !muted && !started && 'speaker-nudge'
+              )}
+            >
+              {muted ? (
+                <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M11 5 6 9H3v6h3l5 4V5z" />
+                  <line x1="23" y1="9" x2="17" y2="15" strokeLinecap="round" />
+                  <line x1="17" y1="9" x2="23" y2="15" strokeLinecap="round" />
+                </svg>
+              ) : (
+                <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M11 5 6 9H3v6h3l5 4V5z" />
+                  <path d="M15.5 8.5a5 5 0 0 1 0 7" strokeLinecap="round" />
+                  <path d="M18.5 6a8 8 0 0 1 0 12" strokeLinecap="round" />
+                </svg>
+              )}
+            </button>
+
+            <button
+              onClick={() => setSearchOpen(true)}
+              aria-label="Search"
+              className="text-vault-cream/70 hover:text-vault-gold hover:bg-vault-gold/10 rounded-full transition-colors duration-300 p-2"
+            >
+              <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="11" cy="11" r="7" />
+                <path d="m16.5 16.5 4 4" strokeLinecap="round" />
+              </svg>
+            </button>
+
+            <button
+              onClick={() => setOpen(true)}
+              aria-label={count > 0 ? `Cart, ${count} items` : 'Cart'}
+              className="text-vault-cream/70 hover:text-vault-gold hover:bg-vault-gold/10 rounded-full transition-colors duration-300 p-2 relative"
+            >
+              <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z" />
+                <line x1="3" y1="6" x2="21" y2="6" />
+                <path d="M16 10a4 4 0 01-8 0" />
+              </svg>
+              {count > 0 && (
+                <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 flex items-center justify-center rounded-full bg-vault-gold text-vault-black text-[9px] font-bold tabular-nums">
+                  {count}
+                </span>
+              )}
+            </button>
+
+            {/* Mobile menu button */}
+            <button
+              className="md:hidden text-vault-cream/70 hover:text-vault-gold hover:bg-vault-gold/10 rounded-full transition-colors duration-300 p-2"
+              aria-label={menuOpen ? 'Close menu' : 'Open menu'}
+              aria-expanded={menuOpen}
+              onClick={() => setMenuOpen(!menuOpen)}
+            >
+              {menuOpen ? (
+                <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M18 6L6 18M6 6l12 12" strokeLinecap="round" />
+                </svg>
+              ) : (
+                <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 6h16M4 12h16M4 18h16" strokeLinecap="round" />
+                </svg>
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Mobile menu */}
+      {menuOpen && (
+        <nav
+          className="md:hidden bg-vault-black/97 border-t border-vault-gold/10 px-6 py-6 space-y-4"
+          aria-label="Mobile navigation"
+        >
+          {navLinks.map((link) => (
+            <Link
+              key={link.label}
+              href={link.href}
+              className="block text-sm tracking-[0.15em] uppercase text-vault-muted hover:text-vault-cream transition-colors duration-200"
+              onClick={() => setMenuOpen(false)}
+            >
+              {link.label}
+            </Link>
+          ))}
+          <button
+            onClick={() => {
+              setMenuOpen(false)
+              setSearchOpen(true)
+            }}
+            className="block mt-4 text-sm tracking-[0.15em] uppercase text-vault-gold hover:text-vault-cream transition-colors duration-200"
+          >
+            Search
+          </button>
+        </nav>
+      )}
+    </header>
+    <SearchOverlay open={searchOpen} onClose={() => setSearchOpen(false)} />
+    <CartDrawer />
+    <QuickView />
+    </>
+  )
+}

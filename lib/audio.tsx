@@ -1,0 +1,172 @@
+'use client'
+
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  useCallback,
+  useRef,
+  useId,
+  type ReactNode,
+} from 'react'
+import { audioEngine } from './audioEngine'
+
+// Bumped v3→v4 to clear any stale remembered mute so sound is ON by default for
+// everyone (a one-time reset — a stray mute click during testing left the bed muted,
+// and `unmute()` correctly refuses to override a user mute, so scroll never started it).
+// Sound still stays silent until the first user gesture per the browser autoplay policy.
+const STORAGE_KEY = 'okhtein-audio-v1'
+
+interface AudioState {
+  muted: boolean
+  toggle: () => void
+  hydrated: boolean
+  // True once the ambient music is ACTUALLY audible (polled from audioEngine.bedAudible).
+  // The header stops the "tap for sound" speaker pulse once this flips.
+  started: boolean
+  // Register/unregister a section as wanting the ambient bed on. The bed plays
+  // while ANY registered section is active (see useBedSection).
+  setBedSection: (id: string, active: boolean) => void
+}
+
+const AudioCtx = createContext<AudioState | null>(null)
+
+/**
+ * App-wide audio state. SSR-safe (starts muted on the server; the real state is
+ * resolved after mount from localStorage / prefers-reduced-motion). The actual
+ * sound graph is the `audioEngine` singleton — components that drive the bed or
+ * fire cues import it directly; this provider only owns the mute toggle + the
+ * one-time gesture unlock the browser autoplay policy requires.
+ */
+export function AudioProvider({ children }: { children: ReactNode }) {
+  // Start muted to match the server render; corrected in the effect below so
+  // there's no hydration divergence (same pattern as the cart).
+  const [muted, setMuted] = useState(true)
+  const [hydrated, setHydrated] = useState(false)
+  // Flips true the instant the ambient bed becomes audible (a real gesture started it).
+  // Drives the header's "tap for sound" speaker pulse: nudge until this is true.
+  const [started, setStarted] = useState(false)
+
+  // Ambient-bed coordination. The bed plays while ANY cinematic section (vault,
+  // finale, unboxing video) is in view, and fades out once the user reaches the
+  // shop. Sections report in-view via useBedSection(); we OR them here so the
+  // engine's setBedActive is called from exactly ONE place. The id Set lives in a
+  // ref (stable callback, no stale closures); React state flips only on the 0↔n
+  // boundary, so sections toggling while another stays active cause no re-render.
+  const bedIdsRef = useRef<Set<string>>(new Set())
+  const [bedAny, setBedAny] = useState(false)
+  const setBedSection = useCallback((id: string, active: boolean) => {
+    const s = bedIdsRef.current
+    if (active) s.add(id)
+    else s.delete(id)
+    setBedAny((prev) => (s.size > 0) === prev ? prev : s.size > 0)
+  }, [])
+  useEffect(() => {
+    audioEngine.setBedActive(bedAny)
+  }, [bedAny])
+
+  // Poll for the bed becoming audible (a real gesture started it) → stop the header
+  // speaker pulse. Cheap (400ms) and self-cancels the moment sound is on.
+  useEffect(() => {
+    if (!hydrated || started) return
+    const id = setInterval(() => {
+      if (audioEngine.bedAudible) {
+        setStarted(true)
+        clearInterval(id)
+      }
+    }, 400)
+    return () => clearInterval(id)
+  }, [hydrated, started])
+
+  useEffect(() => {
+    // Sound is ON by default for everyone (it stays silent until the first user
+    // gesture, per the browser autoplay policy). An explicit mute is remembered.
+    // Guard the read: Safari Private Mode (and any storage-disabled context) throws
+    // synchronously on localStorage access. An unguarded throw here would skip
+    // setHydrated(true), so the gesture-unlock effect below (gated on `hydrated`)
+    // would never wire up and audio would never start. Mirrors cart.tsx's guard.
+    let initial = false
+    try {
+      initial = localStorage.getItem(STORAGE_KEY) === '1'
+    } catch {
+      // storage unavailable → fall back to the unmuted default
+    }
+    setMuted(initial)
+    // prefers-reduced-motion: do NOT auto-start the ambient bed — a reduced-motion user shouldn't be
+    // ambushed by looping music (WCAG 2.2.2). The manual speaker toggle still lets them opt in.
+    const rm = typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    if (!rm) audioEngine.initBed() // muted-autoplay the bed now → silent until the first interaction
+    audioEngine.setMuted(initial)
+    setHydrated(true)
+  }, [])
+
+  // Unlock on the first VALID user gesture (autoplay policy). Chrome does NOT count
+  // scroll/wheel/touchmove as a user-activation for AudioContext.resume() — so a
+  // `{once:true}` listener gets consumed by the first scroll (resume stays blocked)
+  // and never retries, which is why audio used to start only on the speaker click.
+  // Fix: KEEP listening and retry unlock() on every gesture, detaching only once the
+  // context is actually running (a real activation — click/key/touch — landed).
+  useEffect(() => {
+    if (!hydrated) return
+    const events = ['scroll', 'wheel', 'touchstart', 'touchmove', 'pointerdown', 'keydown', 'click', 'mousedown'] as const
+    const opts: AddEventListenerOptions = { passive: true } // NOT once — re-arm until running
+    const detach = () => events.forEach((e) => window.removeEventListener(e, onGesture))
+    const onGesture = () => {
+      audioEngine.unlock() // Web Audio wind/cues (Chrome needs a real click to resume)
+      audioEngine.unmute() // standalone bed → becomes audible even on a wheel/scroll
+      // ctx.resume() is async — `running` is usually still false the instant after
+      // unlock() even on a VALID gesture. Re-check on the next tick so a single
+      // valid click/keypress detaches cleanly (don't depend on a 2nd gesture).
+      if (audioEngine.running) detach()
+      else setTimeout(() => { if (audioEngine.running) detach() }, 80)
+    }
+    events.forEach((e) => window.addEventListener(e, onGesture, opts))
+    return detach
+  }, [hydrated])
+
+  const toggle = useCallback(() => {
+    audioEngine.unlock() // the click is a valid gesture — (re)start the Web Audio ctx
+    audioEngine.unmute() // a click is an interaction → the bed becomes audible
+    setMuted((m) => {
+      // Plain toggle now: the bed muted-autoplays and unmutes on the first interaction,
+      // so the icon just flips mute on/off (no "first click turns it on" special case).
+      const next = !m
+      try {
+        localStorage.setItem(STORAGE_KEY, next ? '1' : '0')
+      } catch {
+        // ignore storage failures (private mode etc.)
+      }
+      audioEngine.setMuted(next)
+      return next
+    })
+  }, [])
+
+  return (
+    <AudioCtx.Provider value={{ muted, toggle, hydrated, started, setBedSection }}>
+      {children}
+    </AudioCtx.Provider>
+  )
+}
+
+export function useAudio() {
+  const ctx = useContext(AudioCtx)
+  if (!ctx) throw new Error('useAudio must be used within AudioProvider')
+  return ctx
+}
+
+/**
+ * Report this section's in-view state to the shared ambient-bed registry. The bed
+ * plays while ANY registered section is active and fades out when the last one
+ * leaves view — so the music carries across the vault → finale → video stretch and
+ * stops in the shop. Auto-unregisters on unmount. No-ops if no provider is present.
+ */
+export function useBedSection(active: boolean) {
+  const ctx = useContext(AudioCtx)
+  const id = useId()
+  const setBedSection = ctx?.setBedSection
+  useEffect(() => {
+    setBedSection?.(id, active)
+    return () => setBedSection?.(id, false)
+  }, [setBedSection, id, active])
+}
