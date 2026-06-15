@@ -31,6 +31,7 @@ export interface Product {
 }
 
 import { ASSETS } from './assets'
+import { withBase } from './basePath'
 
 const CDN = 'https://cdn.shopify.com/s/files/1/0285/5210/2027/files'
 
@@ -169,9 +170,11 @@ export const products: Product[] = [
 ]
 
 // Every product photo is now a LOCAL background-removed TRANSPARENT PNG (scripts/_bgremove.mjs),
-// keyed by slug — so the products float on the dark UI instead of sitting in a white box. next/image
-// applies the basePath, so the leading "/" resolves correctly under the GitHub-Pages subpath too.
-for (const p of products) p.image = `/products/${p.slug}.png`
+// keyed by slug — so the products float on the dark UI instead of sitting in a white box. We MUST
+// prefix the GitHub-Pages basePath ourselves via withBase(): next/image with `unoptimized: true`
+// (static export) does NOT prepend basePath to a string src, so a bare "/products/…" 404s under
+// the /okhtein subpath. Same reason GLBs/HDRI/textures all call withBase explicitly.
+for (const p of products) p.image = withBase(`/products/${p.slug}.png`)
 
 // Per-category accent — rebrand: refined champagne/pewter (was warm gold/brass).
 export const ACCENT = '#C7BCA3'

@@ -129,14 +129,15 @@ export default function CartDrawer() {
                   href={`${STORE_URL}/products/${line.slug}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="relative w-20 h-20 shrink-0 rounded bg-vault-card border border-vault-border overflow-hidden"
+                  className="relative w-20 h-20 shrink-0 rounded border border-vault-border overflow-hidden"
+                  style={{ background: 'radial-gradient(ellipse at 50% 42%, #C7BCA318 0%, #14110D 75%)' }}
                 >
                   <Image
                     src={line.image}
                     alt={`${line.brand} ${line.name}`}
                     fill
                     sizes="80px"
-                    className="object-contain p-1.5"
+                    className="object-contain p-1.5 drop-shadow-[0_6px_10px_rgba(0,0,0,0.5)]"
                   />
                 </a>
                 <div className="flex-1 min-w-0">

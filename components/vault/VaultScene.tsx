@@ -531,6 +531,17 @@ function nicheLatticeTex(): THREE.CanvasTexture {
   return t
 }
 
+// Mashrabiya texture for the CORRIDOR TERMINUS end-screen — a wider repeat than the niche so the big
+// pierced screen at the end of the walk reads as a full carved wall the warm room-light spills through.
+let _terminusTex: THREE.CanvasTexture | null = null
+function terminusTex(): THREE.CanvasTexture {
+  if (_terminusTex) return _terminusTex
+  const t = makeMashrabiyaTexture()
+  t.repeat.set(6, 4)
+  _terminusTex = t
+  return t
+}
+
 function MashrabiyaPanel({
   position,
   rotation = [0, 0, 0],
@@ -588,6 +599,7 @@ const fanousGlowMat = new THREE.MeshBasicMaterial({ map: makeGlowTexture(), colo
 const sconceFlameMat = new THREE.MeshBasicMaterial({ color: new THREE.Color('#F8E0A2').multiplyScalar(1.5), toneMapped: false }) // warm sconce flame, blooms
 const fretInsetMat = new THREE.MeshStandardMaterial({ color: '#1A1713', roughness: 1, metalness: 0 }) // dark recess behind the brass fretwork band so the pierced pattern reads with contrast
 const runnerMat = new THREE.MeshStandardMaterial({ color: '#3A352B', emissive: '#CABF9E', emissiveIntensity: 0.5, roughness: 0.5, metalness: 0.5 }) // champagne floor-inlay runner: a softly-lit brass line on the dark floor
+const terminusGlowMat = new THREE.MeshBasicMaterial({ map: makeGlowTexture(), color: '#F0DBA6', transparent: true, opacity: 0.42, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }) // warm bloom-bed behind the corridor terminus screen — the "lit room" the pierced lattice filters
 
 function CairoLantern({ position, scale = 1, ceilingY = 3.4, light = false }: { position: [number, number, number]; scale?: number; ceilingY?: number; light?: boolean }) {
   const rodLen = Math.max(0.2, ceilingY - position[1] - 0.34)
@@ -1036,7 +1048,7 @@ function ShowcasePedestal({
 // S1 pulled inboard (was x1.62/z6.2 → half-cropped at the right edge on entry).
 const RUNWAY_SLOTS: { position: [number, number, number]; yaw: number }[] = [
   { position: [1.5, 0, 5.8], yaw: -0.58 },  // right — entrance approach (inboard so it's not edge-cropped)
-  { position: [-1.5, 0, -3.1], yaw: 0.5 },  // left — caught as the camera arcs left past the hero
+  { position: [-2.3, 0, -2.1], yaw: 0.62 }, // left — pulled OUT (was x-1.5/z-3.1, dead-behind the z-3 arch pillar) + forward of the arch + clear of its ±1.69 frame, so it's never occluded as the camera arcs left
   { position: [2.0, 0, -4.4], yaw: -0.55 }, // right — set wider + earlier so it doesn't block the atelier clasp behind it
 ]
 
@@ -1280,6 +1292,8 @@ function TwoSistersFinale({ scrollProgress }: { scrollProgress: React.MutableRef
   const rightRef = useRef<THREE.Group>(null)
   const glintRef = useRef<THREE.Mesh>(null)
   const glintMatRef = useRef<THREE.MeshBasicMaterial>(null)
+  const groupRef = useRef<THREE.Group>(null)
+  const revealRef = useRef<THREE.Group>(null)
   const glow = useMemo(() => makeGlowTexture(), [])
   // Dedicated mark material with an IGNITING emissive: a pure-metal mark reads near-black in the dark
   // back-gallery (metals only reflect, and there's little to reflect here), so the emblem self-lights —
@@ -1291,6 +1305,12 @@ function TwoSistersFinale({ scrollProgress }: { scrollProgress: React.MutableRef
   const markMat = useMemo(() => new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false, side: THREE.DoubleSide }), [])
   useFrame(() => {
     const p = Math.max(0, Math.min(1, scrollProgress.current))
+    // REVEAL GATE: the emblem doesn't exist until you approach the finale — it forms (scales in) over
+    // p0.58→0.74 so it never floats as distant glyphs in the corridor void during the hero/gallery beats.
+    // The whole finale group (incl. its local lights) is hidden until then.
+    const reveal = THREE.MathUtils.smoothstep(p, 0.58, 0.74)
+    if (groupRef.current) groupRef.current.visible = reveal > 0.001
+    if (revealRef.current) revealRef.current.scale.setScalar(reveal)
     // spread → meet: close EARLY so the COMPLETED mark is fully seated and HELD under the
     // "two sisters, one mark." headline (0.80–0.92) and through the camera-hold settle (~0.88) —
     // not completing in the copy gap after the line has faded (the old (p-0.72)/0.20 met at p≈0.92).
@@ -1313,41 +1333,44 @@ function TwoSistersFinale({ scrollProgress }: { scrollProgress: React.MutableRef
     // Placed on the camera's ACTUAL gaze through the two-sisters beat (LOOK ≈ z-11, camera ≈ z-9.5..-10.5)
     // so the mark is the framed subject — not off in the far dark at z-14.6 where the exit camera only
     // points at p≈1.0 (which is scrim-covered). z-12.4 keeps it framed without ballooning point-blank.
-    <group position={[0, 1.24, -12.4]}>
-      {/* neutral halo backlight — TIGHT + soft so it lifts the mark off the dark wall WITHOUT washing
-          the whole frame to grey (a big additive plane near the camera flooded the finale). */}
-      <mesh position={[0, 0, -0.5]}>
-        <planeGeometry args={[1.9, 1.15]} />
-        {/* a WHISPER of backlight only — the old 0.16 plane read as a flat grey smudge that the mark
-            got lost INSIDE. The luminous mark + its bloom now carry the glow; this just lifts it off the wall. */}
-        <meshBasicMaterial map={glow} transparent opacity={0.08} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
-      </mesh>
+    <group ref={groupRef} position={[0, 1.24, -12.4]}>
       {/* neutral key (front) + cool rim (behind) so the champagne MARK reads bright + edge-separates
-          from the dark back wall (boosted for the darker chiaroscuro theme). */}
+          from the dark back wall. Direct children → gated by the group's visibility (hidden until the
+          emblem reveals), not scaled by the form-in. */}
       <pointLight position={[0, 0.4, 1.4]} intensity={9} color="#EFE8DA" distance={4} decay={2} />
       <pointLight position={[0, 0.2, -0.8]} intensity={4} color="#C4D6FF" distance={2.8} decay={2} />
-      {/* a thin emissive meridian/groundline under the mark — grounds it + fills the lower void */}
-      <mesh position={[0, -1.15, 0]} material={amberMat}>
-        <boxGeometry args={[5.2, 0.018, 0.018]} />
-      </mesh>
-      {/* champagne light POOL spilling onto the floor — grounds the mark in the house, not a grey void */}
-      <mesh position={[0, -1.16, 0.25]} rotation={[-Math.PI / 2, 0, 0]}>
-        <planeGeometry args={[3.2, 1.5]} />
-        <meshBasicMaterial map={glow} transparent opacity={0.2} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} color="#E9DCBB" />
-      </mesh>
-      {/* the two EMBLEM HALVES: left half (seam at its right edge) + right half (mirrored) → they
-          slide together and complete the real Okhtein double-arrow mark. */}
-      <group ref={leftRef} position={[-0.62, 0, 0]}>
-        <mesh geometry={emblemHalfGeo()} material={markMat} scale={0.72} />
+      {/* Everything VISIBLE forms in together (scaled 0→1 by `reveal`) as you approach the finale, so
+          the mark, its glow, and groundline grow into being instead of floating pre-made in the void. */}
+      <group ref={revealRef}>
+        {/* neutral halo backlight — TIGHT + soft so it lifts the mark off the dark wall WITHOUT washing
+            the whole frame to grey. */}
+        <mesh position={[0, 0, -0.5]}>
+          <planeGeometry args={[1.9, 1.15]} />
+          <meshBasicMaterial map={glow} transparent opacity={0.08} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
+        </mesh>
+        {/* a thin emissive meridian/groundline under the mark — grounds it + fills the lower void */}
+        <mesh position={[0, -1.15, 0]} material={amberMat}>
+          <boxGeometry args={[5.2, 0.018, 0.018]} />
+        </mesh>
+        {/* champagne light POOL spilling onto the floor — grounds the mark in the house, not a grey void */}
+        <mesh position={[0, -1.16, 0.25]} rotation={[-Math.PI / 2, 0, 0]}>
+          <planeGeometry args={[3.2, 1.5]} />
+          <meshBasicMaterial map={glow} transparent opacity={0.2} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} color="#E9DCBB" />
+        </mesh>
+        {/* the two EMBLEM HALVES: left half (seam at its right edge) + right half (mirrored) → they
+            slide together and complete the real Okhtein double-arrow mark. */}
+        <group ref={leftRef} position={[-0.62, 0, 0]}>
+          <mesh geometry={emblemHalfGeo()} material={markMat} scale={0.72} />
+        </group>
+        <group ref={rightRef} position={[0.62, 0, 0]} rotation={[0, Math.PI, 0]}>
+          <mesh geometry={emblemHalfGeo()} material={markMat} scale={0.72} />
+        </group>
+        {/* specular GLINT — a soft catch-light raking across the mark as it forms (sells polished metal) */}
+        <mesh ref={glintRef} position={[0, 0, 0.22]}>
+          <planeGeometry args={[0.5, 0.95]} />
+          <meshBasicMaterial ref={glintMatRef} map={glow} transparent opacity={0} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} color="#FFF6E2" />
+        </mesh>
       </group>
-      <group ref={rightRef} position={[0.62, 0, 0]} rotation={[0, Math.PI, 0]}>
-        <mesh geometry={emblemHalfGeo()} material={markMat} scale={0.72} />
-      </group>
-      {/* specular GLINT — a soft catch-light raking across the mark as it forms (sells polished metal) */}
-      <mesh ref={glintRef} position={[0, 0, 0.22]}>
-        <planeGeometry args={[0.5, 0.95]} />
-        <meshBasicMaterial ref={glintMatRef} map={glow} transparent opacity={0} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} color="#FFF6E2" />
-      </mesh>
     </group>
   )
 }
@@ -1589,9 +1612,10 @@ function HeroDisplay({ scrollProgress, reduced = false, tier }: { scrollProgress
           url={ASSETS.heroBag}
           // ITER3: the hero bag read SMALL (out-sold by the flat catalog photo) — "THE PRODUCT IS THE
           // VERDICT". Scaled up so it COMMANDS the frame as the signature piece (1.0 was the old "approved"
-          // size, judged under-heroic). 1.22 (not 1.35): the FOV breathing tightens ~10% at the p0.46 dwell
-          // peak, and 1.35 CLIPPED the top handle there — 1.22 stays dominant AND clears through the dwell.
-          normalizeTo={1.22}
+          // size, judged under-heroic). 1.35 once CLIPPED the top handle at the FOV-tightest dwell — so the
+          // ceiling is ~1.34. ITER4: 1.22→1.32 (now that the background void/glyphs are GATED away, the bag
+          // is the uncontested subject; verified on real frames to clear the handle through the dwell).
+          normalizeTo={1.32}
           seat="center"
           castShadow
           // The SIGNATURE piece must be the richest-lit surface in its frame — was 1.3 (the LOWEST
@@ -1888,9 +1912,10 @@ export default function VaultScene({ scrollProgress, active, tier, reduced = fal
           off-geometry pixel reads as elegant darkness, not an orange wash. The lit pieces pop against
           it. (Was warm #2A1E12 — the main source of the muddy-orange soup.) */}
       <color attach="background" args={['#0E0B09']} />
-      {/* Fog — neutral cool-charcoal, pushed OUT (14→30) so the mid-corridor + hero stay crisp and the
-          far end recedes into deep dark, giving each lit piece a black ground. (Was warm #3E2F1C 10/26.) */}
-      <fog attach="fog" args={['#121110', 14, 30]} />
+      {/* Fog — warm-charcoal, pulled in slightly (11→28) so the DEEP corridor recedes as atmospheric
+          mist (the lit terminus end-screen softens into depth when viewed from the hero) while the hero
+          (z0, ~2.5u) and mid-corridor stay crisp. Warmer tint marries the champagne house lighting. */}
+      <fog attach="fog" args={['#15110C', 11, 28]} />
 
       {/* Baked image-based lighting — now the PRIMARY light source (the Awwwards
           approach). Rendered ONCE into a cubemap (frames={1}), so it lights every
@@ -2052,6 +2077,31 @@ export default function VaultScene({ scrollProgress, active, tier, reduced = fal
       {/* THE HAND — atelier workbench (provenance-as-craft). Replaces the FitSole
           authenticity/verification counter + the shoebox stacks + the cashier checkout. */}
       <AtelierWorkbench scrollProgress={scrollProgress} />
+
+      {/* CORRIDOR TERMINUS — the walk now ends in a DESTINATION, not a black void. A warm "lit room"
+          behind a pierced brass mashrabiya screen, framed by a brass arch, set just behind the finale
+          mark (z-12.4). Everything is unlit MeshBasicMaterial/emissive on purpose — standard materials
+          render black at this z≈-14 depth (the same constraint the finale mark works around) — so the
+          end-screen stays luminous. From the hero the fog softens it into atmospheric depth; at the
+          finale the emblem reads against a glowing carved lattice instead of empty dark. */}
+      <group position={[0, 0, -13.9]}>
+        {/* warm 'lit room' backplane the pierced screen filters */}
+        <mesh position={[0, 1.95, -0.4]}>
+          <planeGeometry args={[6.6, 4.1]} />
+          <meshBasicMaterial color="#5E4D2E" toneMapped={false} />
+        </mesh>
+        {/* soft champagne bloom-bed centred behind the emblem so the seam reads against light */}
+        <mesh position={[0, 1.45, -0.18]} material={terminusGlowMat}>
+          <planeGeometry args={[5.2, 3.7]} />
+        </mesh>
+        {/* the pierced brass mashrabiya screen — warm room-light spills through the star holes */}
+        <mesh position={[0, 1.95, 0]}>
+          <planeGeometry args={[6.4, 3.9]} />
+          <meshBasicMaterial map={terminusTex()} transparent alphaTest={0.3} color="#CBB98C" toneMapped={false} side={THREE.DoubleSide} />
+        </mesh>
+      </group>
+      {/* brass arch framing the terminus + the converged emblem */}
+      <CorridorArch z={-13.2} scale={1.06} />
 
       {/* THE TWO SISTERS — the finale: two brass arrowheads converge to form the Okhtein
           mark. Replaces the FitSole "Collective" membership film + the brand-totem corridor. */}

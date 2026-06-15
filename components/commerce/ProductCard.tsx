@@ -25,6 +25,9 @@ interface ProductCardProps {
 
 export default function ProductCard({ product, featured = false, anchor = false }: ProductCardProps) {
   const [added, setAdded] = useState(false)
+  // The product photos are background-removed TRANSPARENT PNGs, so the loading silhouette behind them
+  // would show THROUGH the cut-out — fade it out the moment the real photo loads.
+  const [loaded, setLoaded] = useState(false)
   const { add } = useCart()
   const imgRef = useRef<HTMLImageElement>(null)
 
@@ -84,8 +87,14 @@ export default function ProductCard({ product, featured = false, anchor = false 
           background: `radial-gradient(ellipse at 50% 42%, ${accent}1F 0%, #18150F 62%, #100E0A 100%)`,
         }}
       >
-        {/* Loading silhouette behind the real photo — an elegant handbag form. */}
-        <div className="absolute inset-0 flex items-center justify-center">
+        {/* Loading silhouette behind the real photo — an elegant handbag form. Fades out on load so it
+            never shows through the transparent PNG cut-out. */}
+        <div
+          className={cn(
+            'absolute inset-0 flex items-center justify-center transition-opacity duration-500',
+            loaded ? 'opacity-0' : 'opacity-100'
+          )}
+        >
           <svg
             viewBox="0 0 200 160"
             className="w-1/2 opacity-15"
@@ -116,8 +125,9 @@ export default function ProductCard({ product, featured = false, anchor = false 
           src={product.image}
           alt={product.name}
           fill
+          onLoad={() => setLoaded(true)}
           sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
-          className="object-contain p-4 transition-transform duration-300 ease-out group-hover:scale-[1.85] will-change-transform"
+          className="object-contain p-4 drop-shadow-[0_14px_24px_rgba(0,0,0,0.5)] transition-transform duration-300 ease-out group-hover:scale-[1.85] will-change-transform"
         />
 
         {/* Quick-view trigger — opens the vitrine (the 3D EXAMINER for pieces that

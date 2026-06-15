@@ -36,6 +36,7 @@ export default function QuickView() {
   const [product, setProduct] = useState<Product | null>(null)
   const [added, setAdded] = useState(false)
   const [shown, setShown] = useState(false) // drives the staggered open reveal
+  const [loaded, setLoaded] = useState(false) // fade the silhouette out once the transparent PNG loads
   const panelRef = useRef<HTMLDivElement>(null)
   const { add, setOpen: setCartOpen } = useCart()
   const open = product !== null
@@ -46,6 +47,7 @@ export default function QuickView() {
       const p = (e as CustomEvent<Product>).detail
       if (!p) return
       setAdded(false)
+      setLoaded(false)
       setProduct(p)
     }
     window.addEventListener(QUICKVIEW_EVENT, onOpen as EventListener)
@@ -171,7 +173,7 @@ export default function QuickView() {
               {/* Left — the spotlit piece, presented on a plinth (echoes the 3D hero). */}
               <div
                 className="relative aspect-square sm:aspect-auto sm:min-h-[26rem] overflow-hidden"
-                style={{ background: `radial-gradient(ellipse at 50% 64%, ${accent}12 0%, #161412 78%)` }}
+                style={{ background: `radial-gradient(ellipse at 50% 44%, ${accent}1F 0%, #161412 64%, #0F0D0B 100%)` }}
               >
                 {product.model ? (
                   /* THE signature interaction — examine the piece in the round */
@@ -185,8 +187,9 @@ export default function QuickView() {
                   </>
                 ) : (
                   <>
-                    {/* Loading silhouette behind the photo — handbag form (matches ProductCard). */}
-                    <div className="absolute inset-0 flex items-center justify-center">
+                    {/* Loading silhouette behind the photo — handbag form (matches ProductCard). Fades on
+                        load so it never shows through the transparent PNG cut-out. */}
+                    <div className={cn('absolute inset-0 flex items-center justify-center transition-opacity duration-500', loaded ? 'opacity-0' : 'opacity-100')}>
                       <svg viewBox="0 0 200 160" className="w-2/5 opacity-[0.12]" fill="none" stroke="currentColor" strokeWidth="4" style={{ color: accent }} aria-hidden="true">
                         <path d="M72 70 C72 44 128 44 128 70" strokeLinecap="round" />
                         <path
@@ -208,9 +211,10 @@ export default function QuickView() {
                       src={product.image}
                       alt={product.name}
                       fill
+                      onLoad={() => setLoaded(true)}
                       sizes="(max-width: 640px) 90vw, 384px"
                       className={cn(
-                        'object-contain p-8 transition-all duration-700 ease-out',
+                        'object-contain p-8 drop-shadow-[0_22px_38px_rgba(0,0,0,0.55)] transition-all duration-700 ease-out',
                         shown ? 'opacity-100 scale-100' : 'opacity-0 scale-95'
                       )}
                     />

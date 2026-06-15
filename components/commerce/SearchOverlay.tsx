@@ -163,7 +163,10 @@ export default function SearchOverlay({ open, onClose }: SearchOverlayProps) {
                     onClick={() => goTo(p.slug)}
                     className="w-full flex items-center gap-4 px-3 py-2.5 rounded-md text-left hover:bg-vault-card transition-colors duration-150"
                   >
-                    <span className="relative w-12 h-12 shrink-0 rounded bg-vault-card border border-vault-border overflow-hidden">
+                    <span
+                      className="relative w-12 h-12 shrink-0 rounded border border-vault-border overflow-hidden"
+                      style={{ background: 'radial-gradient(ellipse at 50% 42%, #C7BCA318 0%, #14110D 75%)' }}
+                    >
                       <Image src={p.image} alt={p.name} fill sizes="48px" className="object-contain p-1" />
                     </span>
                     <span className="flex-1 min-w-0">

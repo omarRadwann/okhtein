@@ -48,22 +48,29 @@ export default function FeaturedUnboxing() {
           Featured · Carryable Art
         </p>
         <div className="grid lg:grid-cols-[1.5fr_1fr] gap-10 lg:gap-16 items-center">
-          {/* The piece, shot like carryable art */}
+          {/* The piece, shot like carryable art — floated on a champagne-spotlight vitrine (the photos
+              are background-removed transparent PNGs), so it reads as a lit museum niche, not a flat box. */}
           <div
             className={cn(
-              'relative aspect-[4/3] overflow-hidden rounded-sm border border-vault-border bg-vault-surface transition-all duration-700 ease-out',
+              'relative aspect-[4/3] overflow-hidden rounded-sm border border-vault-border transition-all duration-700 ease-out',
               shown ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'
             )}
+            style={{
+              background:
+                'radial-gradient(ellipse at 50% 40%, #C7BCA322 0%, #18150F 60%, #0E0C08 100%)',
+            }}
           >
+            {/* soft floor pool grounding the piece */}
+            <div className="pointer-events-none absolute inset-x-[18%] bottom-[10%] h-[14%] rounded-[50%] bg-black/45 blur-2xl" />
             <Image
               src={FEATURED.image}
               alt={FEATURED.name}
               fill
               sizes="(min-width: 1024px) 60vw, 100vw"
-              className="object-contain p-8 sm:p-12"
+              className="relative object-contain p-8 sm:p-14 drop-shadow-[0_24px_40px_rgba(0,0,0,0.55)]"
               priority={false}
             />
-            <div className="pointer-events-none absolute inset-0 shadow-[inset_0_0_120px_rgba(0,0,0,0.55)]" />
+            <div className="pointer-events-none absolute inset-0 shadow-[inset_0_0_140px_rgba(0,0,0,0.5)]" />
           </div>
 
           {/* Editorial copy */}
