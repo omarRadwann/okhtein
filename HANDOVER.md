@@ -1,5 +1,54 @@
 # OKHTEIN 3D SITE — SESSION HANDOVER
 
+> **LATEST (2026-06-16 b) — WAVE 2 (hero money-shot) + PERFORMANCE PASS + gap fix + DEPLOY.**
+> - **Wave 2 — hero "lock":** a near-still camera HOLD at the hero dwell (`VaultScene.tsx` camera useFrame,
+>   `heroHold = exp(-((p-0.36)/0.05)²)` lerps cam/look to a path-sampled `heroCam`/`heroLook` at 0.88) so the
+>   bag STOPS dead-centre while the FOV push-in keeps going — a held push, the "expensive" beat. The bag is a
+>   presented float on its plinth (intentional), so no floor contact shadow was added. Verified real-3070.
+> - **PERFORMANCE (measured on the real 3070, `scripts/_perf.mjs` scrapes the `?debug=1` overlay):** the bag
+>   GLBs were meshopt+webp compressed but **never decimated** (hero 805K tris!). Decimated all 8 with
+>   `gltf-transform simplify` (hero-class ratio 0.2 / shelf 0.4) + re-`meshopt`. Result at the worst-case beats:
+>   **entrance 3.86M→1.06M tris (−73%), hero 3.12M→1.03M (−67%)**; bag payload **~17.6MB→~5.8MB**. Detail is in
+>   the 1024² **normal maps**, so the silhouettes/quilting/studs read identically — verified at the CLOSEST view
+>   (the Examine-in-3D modal) + the hero push-in + promenade. Also: proximity-gated the 3 showcase-pedestal key
+>   lights (`keyRef`, off when `dist>6.5`), dropped dead `sofa`/`mirror` preloads in `SkyScene`. Draw calls
+>   unchanged (~633 — would need niche-bag batching, deferred). KTX2 deferred (audit's call). Backups of the
+>   pre-decimation GLBs are in git history at `48118bb` (the `_orig_backup/` working copy is NOT committed).
+> - **Gap fix:** the audit's "mahogany leather renders BLACK" was real in the examiner — dark leather has ~no
+>   specular to catch the upper-right key. Fixed in `ProductExaminer.tsx`: ambient 0.55→0.78 + a warm FRONT
+>   fill `[0.4,0.7,3.0]` so dark leather reads as warm mahogany; the metallic palmette is unaffected (metal
+>   takes ~no diffuse — verified no blowout). The audit's other "gaps" were already closed (cart drawer
+>   auto-opens + count badge; `WebGLBoundary`+`VaultStatic` fallback; typo; headline scrims).
+> - **New harnesses:** `_wave1/_wave2/_perf/_crop/_safecheck/_sig/_examiner/_beat.mjs`. Shots in `.shots-wave1/`,
+>   `.shots-wave2/`, `.shots-check/`. **Deployed** to GH Pages (`omarRadwann/okhtein`, push→main CI).
+
+> **LATEST (2026-06-16) — MASTERPIECE WAVE 1: the Two-Sisters emblem is now REAL CAST CHAMPAGNE METAL.**
+> The brand climax was the #1 open lever ("flat PowerPoint glyph"; true brass thought BLOCKED by the
+> "std-material-renders-black-at-z-12.4" mystery). **That myth is BUSTED** — a one-knob probe (swap
+> `markMat` → a pure champagne `MeshPhysicalMaterial`, build, freeze `__vaultForce=0.87` on the real 3070)
+> proved std/physical metal renders fine at z-12.4 now; the old "black" simply **predated the real
+> `studio.hdr` IBL + the local finale key/rim lights** (a metal had nothing to reflect back then). Pure
+> metal read too DIM for a climax, so the shipped solution in `VaultScene.tsx TwoSistersFinale` is a
+> **HYBRID**: `markMat` = `MeshPhysicalMaterial` (champagne `#CABF9E`, metalness .9, roughness .3,
+> envMapIntensity 3.0, clearcoat .5 **gated to `high`**, `vertexColors` keep emblemHalfGeo's baked sheen)
+> + a **modest emissive floor that HEATS** (`0.18 + k²·1.5`, champagne `#CABF9E` → forge-warm `#F4DEAA`,
+> never orange) so it never goes dead and the metal "catches", with the **IGNITE driven as a light event,
+> not self-glow**: the front KEY is driven hard into the seam (`keyLightRef` `12 + k²·34`) so the cast
+> surface's speculars blow past Bloom, and the champagne back-halo SWELLS (`haloMatRef` `0.18 + k²·0.42`)
+> into a blooming flare as the halves complete — "metal catching fire," not a luminous sticker. Added a
+> **real swept specular** (`glintLightRef`, rakes L→R over p0.74→0.90, peak 26) and a **widened local dark
+> figure/ground pool (7.0×4.4)** behind the mark (gated by `reveal`, leaves the shared corridor terminus
+> untouched) so the gleaming mark separates from the (now-suppressed) lattice. `TwoSistersFinale` now takes
+> a `tier` prop. **Verified on the real RTX 3070 (HIGH) + the SAFE/integrated path — 0 console errors,
+> hero(0.43)+atelier(0.71) unregressed, no crash with clearcoat/bloom gated off.** New dev harnesses:
+> `scripts/_wave1.mjs <label>` (finale + regression beats, sharp-downscaled), `_crop.mjs` (emblem close
+> crop), `_safecheck.mjs`, `_sig.mjs` (clean signature frame, no debug overlay). Shots in `.shots-wave1/`.
+> **PUSHED (2026-06-16, user-chosen "go further"): flare drama + deeper field — warm-heating ignite, a
+> swelling bloom halo, and a widened dark pool that drops the lattice to faint texture. OPEN (USER taste
+> call): final ignite brightness on a real screen — get the user's eyes on `:5000` (the model can't judge
+> glow/motion).** Next waves (roadmap): hero
+> money-shot lock+contact-shadow; motion (03_widearc + promenade symmetry); commerce fly-to-cart + mobile 3D.
+
 > **LATEST (2026-06-15) — live-bug fix pass (deployed gh-pages 1f96b0c / main 4759c46).** Fixed 4 user-reported
 > defects: (1) **products were invisible on GH Pages** — `lib/products.ts` used a bare `/products/…` src but
 > next/image with `unoptimized` doesn't add basePath → now `withBase('/products/…')`; (2) **black void + finale
@@ -141,8 +190,10 @@ improvement → implement → re-evaluate → repeat." Two iterations done, both
   `PlaceholderBag`; a `[GLB-LOADED]` runtime probe PROVED all 10 GLBs load (0 errors) — they MISREAD the cool/over-
   desaturated materials as placeholders. Real root cause = products read pewter not champagne → global desaturation
   `-0.14 → -0.11` (both composers), verified richer-not-orange. Warmth/orange balance is a USER taste call.
-- **REMAINING levers (ranked, NOT done): (-1) finale emblem reads as flat "PowerPoint glyph"** (true brass BLOCKED
-  by std-material-black-at-z-12.4; needs finale relocate OR envMap-on-basic experiment); **(0a) 03_widearc beat
+- **REMAINING levers (ranked): (-1) finale emblem flat "PowerPoint glyph" → ✅ RESOLVED 2026-06-16 (Masterpiece
+  Wave 1).** The "std-material-black-at-z-12.4" was a pre-HDRI artifact, not a hard block — see the top LATEST
+  note; the mark is now a hybrid `MeshPhysicalMaterial` cast-metal that ignites via a driven key flare. Open
+  sub-item: ignite brightness is a USER taste call. **(0a) 03_widearc beat
   scored 3/10 by ALL lenses** (broken in-between; re-key or cut); **(0) live hero floor reflection** (deferred from wave 1 — opaque floor
   needs transparent refactor + mirrored GLB, high-tier); **(1) promenade differentiation** (still tiled/symmetric — vary each arch,
   break the mirror); **(2) atelier emblem richness + bench/tools**; **(3) bag-model↔SKU identity** — the 3D hero is

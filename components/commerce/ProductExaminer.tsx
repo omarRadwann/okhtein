@@ -17,12 +17,18 @@ function ExaminerScene({ url, autoRotate, onInteract }: { url: string; autoRotat
   return (
     <>
       <color attach="background" args={['#121110']} />
-      <ambientLight intensity={0.55} color="#ECEAE4" />
+      {/* Ambient lifted (0.55→0.78): dark LEATHER pieces (e.g. "Mahogany on Striped Brass") have almost no
+          specular to catch the upper-right key, so they were crushing to black; ambient lifts diffuse
+          surfaces (leather) while barely touching the metallic bags (metal has ~no diffuse) — no blowout. */}
+      <ambientLight intensity={0.78} color="#ECEAE4" />
       {/* Clean neutral key + cool fill for dimension (no post on the product — product fidelity first).
           Rebrand: neutral studio light (was a warm gold rig) so the piece reads true champagne/leather. */}
       <spotLight position={[3.5, 5, 4]} angle={0.5} penumbra={0.9} intensity={26} color="#F4EFE6" />
       <pointLight position={[-3.5, 2, 2.5]} intensity={7} color="#C8D2E8" />
       <pointLight position={[0, 1.5, -3]} intensity={5} color="#C2B9A4" />
+      {/* Warm FRONT fill from the camera side — reads the camera-facing face of dark leather as warm
+          MAHOGANY brown instead of black. Modest + warm; metal barely registers it (small specular only). */}
+      <pointLight position={[0.4, 0.7, 3.0]} intensity={6.5} color="#E8DCC4" />
       {/* Neutral gallery IBL (no CDN HDR — built once) for reflections on champagne brass/leather —
           a clean studio so the piece reads sophisticated stone-and-pewter, matching the rebranded walk. */}
       <Environment resolution={256} frames={1}>

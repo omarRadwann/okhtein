@@ -680,9 +680,8 @@ export default function SkyScene({
 // Preload the finale GLBs the moment this module loads (page load — SkyBridge dynamic-imports
 // it up front), so scrolling into "The Meeting" doesn't hitch on model decode / GPU upload:
 // the pairs + props are downloaded + ready long before you arrive. (Same cache key as useGLTF.)
-useGLTF.preload(ASSETS.heroBag)
 useGLTF.preload(ASSETS.bagSisterA)
 useGLTF.preload(ASSETS.bagSisterB)
-useGLTF.preload(ASSETS.sofa)
-useGLTF.preload(ASSETS.mirror)
 useGLTF.preload(ASSETS.olive)
+// (Dropped dead preloads: heroBag is the vault's, decoded there; sofa/mirror were retired with the
+//  salon refactor and are not in the SkyScene graph — preloading them decoded ~0.2MB for nothing.)

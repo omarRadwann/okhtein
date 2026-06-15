@@ -944,6 +944,7 @@ function ShowcasePedestal({
   const turn = useRef<THREE.Group>(null)
   const haloRef = useRef<THREE.Mesh>(null)
   const plateRef = useRef<THREE.MeshBasicMaterial>(null)
+  const keyRef = useRef<THREE.PointLight>(null)
   const clock = useRef(0)
   const plate = useMemo(
     () => makeNamePlate(product.name, formatPrice(product.price), product.collection ?? 'Okhtein'),
@@ -967,9 +968,17 @@ function ShowcasePedestal({
     // PROXIMITY-gated nameplate: visible only when the camera is NEAR this pedestal AND facing it
     // — self-correcting to any camera path, so each piece's plate shows exactly as you reach it and
     // never stacks with another pedestal's plate or a far-away off-screen pedestal.
+    // PROXIMITY gate (shared dist): the camera's distance to this pedestal drives BOTH the nameplate AND
+    // the dedicated key light. Only one pedestal is ever near the camera, so far pedestals shed their
+    // per-fragment light cost (a real iGPU win at the entrance frame where all 3 are in frustum); IBL +
+    // the picture-glow + halo still hold the piece readable as the key fades in on approach.
+    const cam = state.camera
+    const dist = cam.position.distanceTo(pedPos)
+    if (keyRef.current) {
+      const lit = dist < 6.5 ? 9 : 0
+      keyRef.current.intensity += (lit - keyRef.current.intensity) * 0.08
+    }
     if (plateRef.current) {
-      const cam = state.camera
-      const dist = cam.position.distanceTo(pedPos)
       tmpTo.current.copy(pedPos).sub(cam.position).normalize()
       tmpFwd.current.set(0, 0, -1).applyQuaternion(cam.quaternion)
       const facing = tmpTo.current.dot(tmpFwd.current)
@@ -996,7 +1005,7 @@ function ShowcasePedestal({
       {/* Dedicated warm KEY — in the dark chiaroscuro room each showcased piece needs its OWN light
           pool to read (the crushed ambient alone leaves bags as dark lumps). Warm key from above-front
           + the cool fill ambient = the spotlit-object-in-darkness luxury look. */}
-      <pointLight position={[0, 1.85, 0.9]} intensity={9} color="#F2EBDC" distance={3.8} decay={2} />
+      <pointLight ref={keyRef} position={[0, 1.85, 0.9]} intensity={9} color="#F2EBDC" distance={3.8} decay={2} />
       {/* Soft pale picture glow behind the piece (a subtle halo, not orange wash). */}
       <mesh position={[0, 1.55, -0.42]}>
         <planeGeometry args={[1.5, 1.75]} />
@@ -1289,11 +1298,17 @@ function AtelierWorkbench({ scrollProgress }: { scrollProgress: React.MutableRef
 // The two halves of the real OKHTEIN EMBLEM glide in from each side and MEET at centre to complete
 // the mark — the duality of the two sisters joining into one house, rendered not stated. Back-lit by
 // a soft neutral halo (reuse makeGlowTexture).
-function TwoSistersFinale({ scrollProgress }: { scrollProgress: React.MutableRefObject<number> }) {
+function TwoSistersFinale({ scrollProgress, tier }: { scrollProgress: React.MutableRefObject<number>; tier: QualityTier }) {
   const leftRef = useRef<THREE.Group>(null)
   const rightRef = useRef<THREE.Group>(null)
   const glintRef = useRef<THREE.Mesh>(null)
   const glintMatRef = useRef<THREE.MeshBasicMaterial>(null)
+  const glintLightRef = useRef<THREE.PointLight>(null)
+  const keyLightRef = useRef<THREE.PointLight>(null)
+  const haloMatRef = useRef<THREE.MeshBasicMaterial>(null)
+  // The mark's emissive HEATS from calm champagne → a forge-warm flare at the seam (never orange).
+  const champCol = useMemo(() => new THREE.Color('#CABF9E'), [])
+  const flareCol = useMemo(() => new THREE.Color('#F4DEAA'), [])
   const groupRef = useRef<THREE.Group>(null)
   const revealRef = useRef<THREE.Group>(null)
   const glow = useMemo(() => makeGlowTexture(), [])
@@ -1304,7 +1319,21 @@ function TwoSistersFinale({ scrollProgress }: { scrollProgress: React.MutableRef
   // this depth — proven 3× incl. a centred control box). vertexColors carry the dimensional champagne
   // gradient baked into emblemHalfGeo; `color` is a white TINT we drive from a calm glow to a bright
   // IGNITE (pushed well past 1.0 so Bloom flares the seam) — the climax's luminance spike.
-  const markMat = useMemo(() => new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false, side: THREE.DoubleSide }), [])
+  // WAVE 1 — the mark is REAL CAST CHAMPAGNE METAL. The probe proved std/physical materials DO render at
+  // z-12.4 now that a real studio HDRI + the local key/rim lights exist (the old "renders black" predated
+  // both). Pure metal alone read too DIM for a climax, so this is a HYBRID: a metalness surface (real
+  // dimensional reflection of the warm IBL + a swept specular catch-light = "cast metal") carrying a
+  // champagne EMISSIVE floor we drive from a calm glow to a bright IGNITE as the halves seam (the climax
+  // luminance spike → Bloom flares it). vertexColors keep emblemHalfGeo's baked dimensional sheen in the
+  // reflective base; clearcoat (the polished lacquer over cast brass) is gated to discrete GPUs.
+  const markMat = useMemo(() => {
+    const m = new THREE.MeshPhysicalMaterial({
+      color: '#CABF9E', metalness: 0.9, roughness: 0.3, envMapIntensity: 3.0,
+      emissive: new THREE.Color('#CABF9E'), emissiveIntensity: 0, vertexColors: true, side: THREE.DoubleSide,
+    })
+    if (tier === 'high') { m.clearcoat = 0.5; m.clearcoatRoughness = 0.22 }
+    return m
+  }, [tier])
   useFrame(() => {
     const p = Math.max(0, Math.min(1, scrollProgress.current))
     // REVEAL GATE: the emblem doesn't exist until you approach the finale — it forms (scales in) over
@@ -1322,13 +1351,32 @@ function TwoSistersFinale({ scrollProgress }: { scrollProgress: React.MutableRef
     if (rightRef.current) rightRef.current.position.x = spread
     // calm glow while the halves approach → a sharp IGNITION as they seam (tint driven well past 1.0 so
     // Bloom flares it — the brightest moment of the whole walk), then HOLDS bright through the climax.
-    markMat.color.setScalar(0.8 + k * k * 1.7)
+    // IGNITE = polished metal FLARING under a brilliant raking light, NOT a self-glowing sticker. A modest
+    // emissive floor keeps the mark from going dead-dark; at the seam the metal HEATS (champagne → a
+    // forge-warm flare, never orange) and the bright local KEY (driven hard below) blasts the cast surface
+    // so its speculars blow past the bloom threshold — the climax reads as metal catching fire, with real
+    // light/dark dimension, not a uniform luminous decal.
+    const ig = k * k
+    markMat.emissive.copy(champCol).lerp(flareCol, ig)
+    markMat.emissiveIntensity = 0.18 + ig * 1.5
+    // Drive the front KEY hard into the seam: a calm presentation light → a brilliant flare exactly as the
+    // halves complete the mark, so the metal's speculars bloom.
+    if (keyLightRef.current) keyLightRef.current.intensity = 12 + ig * 34
+    // The champagne halo SWELLS into a blooming pool at the seam — the climax's soft light flare.
+    if (haloMatRef.current) haloMatRef.current.opacity = 0.18 + ig * 0.42
     // a specular GLINT rakes across the mark as the halves seam — a catch-light that sells polished
     // metal AND punctuates the ignition. Sweeps L→R over p0.74→0.90, opacity peaking as they meet.
     if (glintRef.current && glintMatRef.current) {
       const sweep = Math.max(0, Math.min(1, (p - 0.74) / 0.16))
       glintRef.current.position.x = -1.15 + sweep * 2.3
-      glintMatRef.current.opacity = Math.sin(sweep * Math.PI) * 0.6
+      // softened — the REAL swept light below now owns the catch-light; the additive plane is a faint complement
+      glintMatRef.current.opacity = Math.sin(sweep * Math.PI) * 0.3
+      if (glintLightRef.current) {
+        // a REAL raking specular: a tight bright light sweeps L→R across the cast metal as the halves seam,
+        // so the highlight is an actual moving reflection on the surface (not just an additive decal).
+        glintLightRef.current.position.x = -1.0 + sweep * 2.0
+        glintLightRef.current.intensity = Math.sin(sweep * Math.PI) * 26
+      }
     }
   })
   return (
@@ -1339,16 +1387,24 @@ function TwoSistersFinale({ scrollProgress }: { scrollProgress: React.MutableRef
       {/* neutral key (front) + cool rim (behind) so the champagne MARK reads bright + edge-separates
           from the dark back wall. Direct children → gated by the group's visibility (hidden until the
           emblem reveals), not scaled by the form-in. */}
-      <pointLight position={[0, 0.4, 1.4]} intensity={9} color="#EFE8DA" distance={4} decay={2} />
+      <pointLight ref={keyLightRef} position={[0, 0.4, 1.4]} intensity={12} color="#EFE8DA" distance={4.6} decay={2} />
       <pointLight position={[0, 0.2, -0.8]} intensity={4} color="#C4D6FF" distance={2.8} decay={2} />
       {/* Everything VISIBLE forms in together (scaled 0→1 by `reveal`) as you approach the finale, so
           the mark, its glow, and groundline grow into being instead of floating pre-made in the void. */}
       <group ref={revealRef}>
-        {/* halo backlight — the mark's OWN light POOL. Enlarged + lifted so the converged emblem sits in a
-            soft champagne glow that separates it from the (now-darker) lattice behind — figure/ground. */}
+        {/* DARK figure/ground pool — a soft near-black radial BEHIND the champagne halo + mark that locally
+            dims the busy terminus lattice, so the gleaming metal mark reads as a bright FIGURE on a dark
+            GROUND instead of getting lost in patterned wallpaper. Local to the finale (gated by reveal) →
+            the corridor terminus stays untouched from the hero/atelier views. */}
+        <mesh position={[0, 0, -0.72]}>
+          <planeGeometry args={[7.0, 4.4]} />
+          <meshBasicMaterial map={glow} transparent opacity={0.9} depthWrite={false} toneMapped={false} color="#0C0A07" />
+        </mesh>
+        {/* halo backlight — the mark's OWN light POOL. Opacity is DRIVEN (calm → swelling bloom at the seam)
+            so the converged emblem flares in a soft champagne glow that separates it from the darker lattice. */}
         <mesh position={[0, 0, -0.6]}>
-          <planeGeometry args={[3.4, 2.4]} />
-          <meshBasicMaterial map={glow} transparent opacity={0.22} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
+          <planeGeometry args={[3.6, 2.6]} />
+          <meshBasicMaterial ref={haloMatRef} map={glow} transparent opacity={0.18} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
         </mesh>
         {/* a thin emissive meridian/groundline under the mark — grounds it + fills the lower void */}
         <mesh position={[0, -1.15, 0]} material={amberMat}>
@@ -1367,11 +1423,14 @@ function TwoSistersFinale({ scrollProgress }: { scrollProgress: React.MutableRef
         <group ref={rightRef} position={[0.62, 0, 0]} rotation={[0, Math.PI, 0]}>
           <mesh geometry={emblemHalfGeo()} material={markMat} scale={0.72} />
         </group>
-        {/* specular GLINT — a soft catch-light raking across the mark as it forms (sells polished metal) */}
+        {/* specular GLINT — a soft additive catch-light raking across the mark (a faint complement now) */}
         <mesh ref={glintRef} position={[0, 0, 0.22]}>
           <planeGeometry args={[0.5, 0.95]} />
           <meshBasicMaterial ref={glintMatRef} map={glow} transparent opacity={0} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} color="#FFF6E2" />
         </mesh>
+        {/* REAL swept specular light — a tight bright source rakes L→R just in front of the mark as the
+            halves seam, so the catch-light is an actual moving reflection on the cast metal, not a decal. */}
+        <pointLight ref={glintLightRef} position={[0, 0, 0.55]} intensity={0} color="#FFF6E2" distance={2.6} decay={2} />
       </group>
     </group>
   )
@@ -1778,6 +1837,11 @@ export default function VaultScene({ scrollProgress, active, tier, reduced = fal
   // (the unanimous "off-centre smudge in a void" cause). ~1.7u back, mark dead-centre + large.
   const finaleCam = useMemo(() => new THREE.Vector3(0, 1.3, -10.7), [])
   const finaleLook = useMemo(() => new THREE.Vector3(0, 1.24, -12.4), [])
+  // HERO LOCK — the camera eases to a near-STILL hold at the hero dwell (p≈0.36) so the bag stops
+  // dead-centre and the eye locks (stillness reads "expensive"); the FOV push-in keeps going over the
+  // hold → a held push. Sampled from the path so the hold blends seamlessly in/out of the fly-through.
+  const heroCam = useMemo(() => CAMERA_PATH.getPointAt(0.36, new THREE.Vector3()), [])
+  const heroLook = useMemo(() => LOOK_PATH.getPointAt(0.36, new THREE.Vector3()), [])
   const prevProgress = useRef(0)
   const shadowReady = useRef(false)
   const shadowTick = useRef(0)
@@ -1824,6 +1888,15 @@ export default function VaultScene({ scrollProgress, active, tier, reduced = fal
     // ignition/FOV/dwell gaussians are re-centred to match (atelier ≈0.716 unchanged; finale uses the hold).
     CAMERA_PATH.getPointAt(p, cameraPos)
     LOOK_PATH.getPointAt(p, lookTarget)
+
+    // HERO LOCK — pin the camera near its hero vantage across p≈0.31–0.41 so the money shot momentarily
+    // STILLS (the FOV push-in keeps going → a held push, the most "expensive"-feeling beat). Tight bell;
+    // the mouse parallax below still adds a hair of life, so it's a lock, not a dead freeze.
+    const heroHold = Math.exp(-(((p - 0.36) / 0.05) ** 2))
+    if (heroHold > 0.001) {
+      cameraPos.lerp(heroCam, heroHold * 0.88)
+      lookTarget.lerp(heroLook, heroHold * 0.88)
+    }
 
     // FINALE HOLD — from p≈0.80 ease the camera OFF the exit fly-through and onto a fixed vantage that
     // holds the COMPLETED emblem dead-centre + large through the climax. The curve tails otherwise
@@ -2115,7 +2188,7 @@ export default function VaultScene({ scrollProgress, active, tier, reduced = fal
 
       {/* THE TWO SISTERS — the finale: two brass arrowheads converge to form the Okhtein
           mark. Replaces the FitSole "Collective" membership film + the brand-totem corridor. */}
-      <TwoSistersFinale scrollProgress={scrollProgress} />
+      <TwoSistersFinale scrollProgress={scrollProgress} tier={tier} />
 
       {/* Drifting dust motes — full on high, halved on standard, off on safe.
           Frozen to a still field under reduced-motion. */}
