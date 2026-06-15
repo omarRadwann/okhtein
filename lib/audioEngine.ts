@@ -171,7 +171,8 @@ class AudioEngine {
     // Phones get the static fallback (no music) — don't fetch ~5MB they'll never hear.
     if (window.matchMedia('(max-width: 640px) and (pointer: coarse)').matches) return
     try {
-      const el = new Audio(withBase('/audio/vault-bed.mp3'))
+      // Ambient music bed — "Aurora" by Luke Bergs (royalty-free via freetouse.com; credit the artist).
+      const el = new Audio(withBase('/audio/aurora.mp3'))
       el.loop = true
       el.preload = 'auto'
       el.muted = true // muted autoplay → allowed pre-gesture; unmute() flips it

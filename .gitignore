@@ -60,3 +60,4 @@ bash.exe.stackdump
 
 # CI workflow needs the gh "workflow" OAuth scope to push; deploying via the gh-pages branch instead.
 /.github/
+/.audit/

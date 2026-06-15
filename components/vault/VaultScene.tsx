@@ -537,7 +537,7 @@ let _terminusTex: THREE.CanvasTexture | null = null
 function terminusTex(): THREE.CanvasTexture {
   if (_terminusTex) return _terminusTex
   const t = makeMashrabiyaTexture()
-  t.repeat.set(6, 4)
+  t.repeat.set(3, 2) // calmer, larger weave — a fine dense grid read as busy "wallpaper" that swallowed the emblem
   _terminusTex = t
   return t
 }
@@ -1047,9 +1047,11 @@ function ShowcasePedestal({
 // the nameplate is PROXIMITY-gated (above), so it shows exactly when you're near + facing it.
 // S1 pulled inboard (was x1.62/z6.2 → half-cropped at the right edge on entry).
 const RUNWAY_SLOTS: { position: [number, number, number]; yaw: number }[] = [
-  { position: [1.5, 0, 5.8], yaw: -0.58 },  // right — entrance approach (inboard so it's not edge-cropped)
-  { position: [-2.3, 0, -2.1], yaw: 0.62 }, // left — pulled OUT (was x-1.5/z-3.1, dead-behind the z-3 arch pillar) + forward of the arch + clear of its ±1.69 frame, so it's never occluded as the camera arcs left
-  { position: [2.0, 0, -4.4], yaw: -0.55 }, // right — set wider + earlier so it doesn't block the atelier clasp behind it
+  // A balanced LEFT-RIGHT-LEFT zig (was right-heavy → a dead-black left half in the gallery sweep). Each is
+  // clear of the arch frames (±1.69) so none is occluded, and the deep LEFT one fills the gallery's dead side.
+  { position: [-1.9, 0, 6.4], yaw: 0.5 },   // left — entrance approach (balances the newly-lit arch centre)
+  { position: [2.1, 0, -2.4], yaw: -0.6 },  // right — caught as the camera arcs left past the hero (clear of the z-3 arch)
+  { position: [-2.1, 0, -5.4], yaw: 0.55 }, // left — fills the gallery's dead-left half; off the atelier clasp at z-8
 ]
 
 function ShowcaseRunway({ reduced = false }: { reduced?: boolean }) {
@@ -1342,11 +1344,11 @@ function TwoSistersFinale({ scrollProgress }: { scrollProgress: React.MutableRef
       {/* Everything VISIBLE forms in together (scaled 0→1 by `reveal`) as you approach the finale, so
           the mark, its glow, and groundline grow into being instead of floating pre-made in the void. */}
       <group ref={revealRef}>
-        {/* neutral halo backlight — TIGHT + soft so it lifts the mark off the dark wall WITHOUT washing
-            the whole frame to grey. */}
-        <mesh position={[0, 0, -0.5]}>
-          <planeGeometry args={[1.9, 1.15]} />
-          <meshBasicMaterial map={glow} transparent opacity={0.08} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
+        {/* halo backlight — the mark's OWN light POOL. Enlarged + lifted so the converged emblem sits in a
+            soft champagne glow that separates it from the (now-darker) lattice behind — figure/ground. */}
+        <mesh position={[0, 0, -0.6]}>
+          <planeGeometry args={[3.4, 2.4]} />
+          <meshBasicMaterial map={glow} transparent opacity={0.22} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
         </mesh>
         {/* a thin emissive meridian/groundline under the mark — grounds it + fills the lower void */}
         <mesh position={[0, -1.15, 0]} material={amberMat}>
@@ -1856,15 +1858,14 @@ export default function VaultScene({ scrollProgress, active, tier, reduced = fal
     }
     state.camera.lookAt(cameraTarget)
 
-    // Subtle FOV "breathing": a gentle push-in (~3.5°, 40→36.5) peaking at the hero
-    // dwell (≈0.46) so the venerated bag leans toward the viewer at the money shot
-    // — and, because the gaussian opens from ~0.40, the bag already reads larger
-    // through the APPROACH, not just at the dwell. This tightens the framing WITHOUT
-    // moving the carefully-tuned camera path. Incidental motion → held flat under
-    // reduced-motion; guarded so the projection matrix only recomputes while moving.
+    // FOV "breathing": a real PUSH-IN (~7°, 40→33) peaking ON the hero dwell (p≈0.368, where the dwell
+    // control point AND the hero-ignition bell at p=0.36 both land — the old curve peaked weak (40→36.5)
+    // and OFF-centre at 0.39). The bag now SEIZES the frame at the money shot, and the gaussian opening
+    // from the approach grows it through the run-in too — all WITHOUT moving the tuned camera path.
+    // Incidental motion → held flat under reduced-motion; guarded so the matrix only recomputes while moving.
     if (!reduced) {
       const cam = state.camera as THREE.PerspectiveCamera
-      const targetFov = 40 - 3.5 * Math.exp(-((p - 0.39) ** 2) / (2 * 0.05 * 0.05))
+      const targetFov = 40 - 7.0 * Math.exp(-((p - 0.368) ** 2) / (2 * 0.045 * 0.045))
       if (Math.abs(cam.fov - targetFov) > 0.02) {
         cam.fov += (targetFov - cam.fov) * (1 - Math.exp(-6 * Math.min(delta, 0.1)))
         cam.updateProjectionMatrix()
@@ -1950,6 +1951,11 @@ export default function VaultScene({ scrollProgress, active, tier, reduced = fal
       <directionalLight position={[4, 7, 2]} intensity={1.55} color="#F4EAD2" />
       {/* Soft glow at the entrance threshold — rebrand: neutral, not warm. */}
       <pointLight position={[0, 2.3, 8]} intensity={6.5} color="#E8E2D4" distance={11} decay={2} />
+      {/* GRAZING RIM on the brass threshold arch (DoorFrame at z=10). The glow above sits 2u IN FRONT of
+          the door facing AWAY from the brass, so the signature pointed arch + apex arrowhead read dark on
+          arrival — frame 1 looked like an empty hallway. This rakes the brass profile so the first frame is
+          a PORTAL into the house. Tight (distance 4.5) → it only lights the gateway, not the whole corridor. */}
+      <pointLight position={[0, 2.4, 10.9]} intensity={9} color="#F4E6C0" distance={4.5} decay={2} />
       {/* (Removed the warm mid/back-corridor point light — the baked Environment's
           back-corridor Lightformers + the counter focal already light this depth.
           One fewer per-fragment light across every material on integrated GPUs.) */}
@@ -2059,10 +2065,12 @@ export default function VaultScene({ scrollProgress, active, tier, reduced = fal
       <MashrabiyaPanel position={[5.42, 2.05, -4.5]} rotation={[0, -Math.PI / 2, 0]} w={2.2} h={1.7} repeat={[3, 2]} />
       <MashrabiyaPanel position={[5.42, 2.05, -10.5]} rotation={[0, -Math.PI / 2, 0]} w={2.2} h={1.7} repeat={[3, 2]} />
 
-      {/* Promenade brass arches — the heritage rhythm the camera passes through */}
-      <CorridorArch z={8} />
-      <CorridorArch z={-3} scale={0.96} />
-      <CorridorArch z={-8} scale={0.92} />
+      {/* Promenade brass arches — a TELESCOPING cadence (denser + a stronger size cascade) so the walk
+          reads as a sequence you pass THROUGH, not one tile stamped thrice. The z=2 arch frames the hero. */}
+      <CorridorArch z={6.5} scale={1.06} />
+      <CorridorArch z={2} scale={1.0} />
+      <CorridorArch z={-3} scale={0.92} />
+      <CorridorArch z={-8} scale={0.84} />
 
       {/* FANOUS — pierced-brass Cairo lanterns hung down the gallery, flanking the niche bags and
           filling the black void with warm candle-light. Staggered L/R + heights so the corridor reads
@@ -2085,19 +2093,21 @@ export default function VaultScene({ scrollProgress, active, tier, reduced = fal
           end-screen stays luminous. From the hero the fog softens it into atmospheric depth; at the
           finale the emblem reads against a glowing carved lattice instead of empty dark. */}
       <group position={[0, 0, -13.9]}>
-        {/* warm 'lit room' backplane the pierced screen filters */}
+        {/* warm 'lit room' backplane the pierced screen filters — DARKENED so the converged emblem reads
+            as a bright mark emerging from shadow (figure/ground), not pinned to a bright busy wall. */}
         <mesh position={[0, 1.95, -0.4]}>
           <planeGeometry args={[6.6, 4.1]} />
-          <meshBasicMaterial color="#5E4D2E" toneMapped={false} />
+          <meshBasicMaterial color="#3A3017" toneMapped={false} />
         </mesh>
         {/* soft champagne bloom-bed centred behind the emblem so the seam reads against light */}
         <mesh position={[0, 1.45, -0.18]} material={terminusGlowMat}>
           <planeGeometry args={[5.2, 3.7]} />
         </mesh>
-        {/* the pierced brass mashrabiya screen — warm room-light spills through the star holes */}
+        {/* the pierced brass mashrabiya screen — warm room-light spills through the star holes. Dimmed
+            (darker brass + 0.55 opacity) so it recedes as architecture behind the mark, not bright wallpaper. */}
         <mesh position={[0, 1.95, 0]}>
           <planeGeometry args={[6.4, 3.9]} />
-          <meshBasicMaterial map={terminusTex()} transparent alphaTest={0.3} color="#CBB98C" toneMapped={false} side={THREE.DoubleSide} />
+          <meshBasicMaterial map={terminusTex()} transparent opacity={0.55} alphaTest={0.3} color="#8A7642" toneMapped={false} side={THREE.DoubleSide} />
         </mesh>
       </group>
       {/* brass arch framing the terminus + the converged emblem */}
@@ -2122,11 +2132,11 @@ export default function VaultScene({ scrollProgress, active, tier, reduced = fal
           an effect — no composer remount, no black flash. */}
       <EffectComposer multisampling={0}>
         {([
-          // N8AO — screen-space AO. REALISM: promoted from HIGH-only to run on STANDARD too (halfRes
-          // there) and CRANKED (radius 0.55→1.1, intensity 1.9→2.6 on high) — this is the #1 grounding
-          // lever: it darkens every contact seam + crevice (mouldings, niches, floor/wall corners) so
-          // objects sit in a lit room instead of floating. Before Bloom so the contact darkening survives.
-          tier !== 'safe' ? (
+          // N8AO — screen-space AO, the #1 grounding lever (darkens every contact seam + crevice so
+          // objects sit in a lit room, not floating). PERF: gated to DISCRETE GPUs only now (matches Bloom)
+          // — a full-screen 16-sample depth-aware pass is one of the heaviest costs on an Iris-Xe-class
+          // iGPU (which maps to 'standard'); the per-object blob shadows already ground the pieces there.
+          tier !== 'safe' && !integrated ? (
             <N8AO
               key="n8ao"
               aoSamples={tier === 'high' ? 24 : 16}
